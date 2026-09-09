@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   server: {
-    port: 1420,
+    port: 1422,
     strictPort: true
   },
   envPrefix: ["VITE_", "TAURI_"],
