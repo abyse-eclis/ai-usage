@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc -b --noEmit",
-    "tauri": "tauri",
+    "tauri": "set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%&& tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },

@@ -1,4 +1,5 @@
 import { Info, RefreshCw, Settings, X } from "lucide-react"
+import { listen } from "@tauri-apps/api/event"
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import type { ProviderUsage } from "../../../shared/types/usage"
@@ -7,7 +8,7 @@ import { primaryLimit } from "../../../shared/utils/usage"
 import { notifyThresholds } from "../../notifications/services/notifications"
 import { SettingsPanel } from "../../settings/components/SettingsPanel"
 import { useSettingsStore } from "../../settings/store/settingsStore"
-import { applyWidgetPreset, hideToTray, setAlwaysOnTop } from "../../window-manager/services/windowManager"
+import { applyWidgetPreset, hideToTray, setAlwaysOnTop, setSkipTaskbar } from "../../window-manager/services/windowManager"
 import { useContainerSize } from "../hooks/useContainerSize"
 import { useUsageStore } from "../store/usageStore"
 import { inferWidgetMode } from "../utils/presets"
@@ -50,6 +51,29 @@ export function Widget() {
   useEffect(() => {
     setAlwaysOnTop(settings.alwaysOnTop)
   }, [settings.alwaysOnTop])
+
+  useEffect(() => {
+    setSkipTaskbar(settings.hideFromTaskbar)
+  }, [settings.hideFromTaskbar])
+
+  useEffect(() => {
+    const unlisteners = [
+      listen("tray-refresh", () => refreshUsage(settings.demoMode)),
+      listen("tray-settings", () => setSettingsOpen(true)),
+      listen<"small" | "medium" | "large">("tray-size", (event) => {
+        updateSettings({ sizeMode: event.payload })
+      }),
+      listen<boolean>("tray-always-on-top", (event) => {
+        updateSettings({ alwaysOnTop: event.payload })
+      })
+    ]
+
+    return () => {
+      unlisteners.forEach((unlisten) => {
+        unlisten.then((dispose) => dispose()).catch(() => undefined)
+      })
+    }
+  }, [refreshUsage, settings.demoMode, updateSettings])
 
   useEffect(() => {
     if (settings.notificationsEnabled) {

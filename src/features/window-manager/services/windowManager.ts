@@ -12,6 +12,14 @@ export async function setAlwaysOnTop(enabled: boolean) {
   }
 }
 
+export async function setSkipTaskbar(enabled: boolean) {
+  try {
+    await getCurrentWindow().setSkipTaskbar(enabled)
+  } catch {
+    await invoke("set_skip_taskbar", { enabled }).catch(() => undefined)
+  }
+}
+
 export async function applyWidgetPreset(mode: WidgetSizeMode) {
   if (mode === "custom") return
   const preset = widgetPresets[mode]
@@ -23,5 +31,9 @@ export async function applyWidgetPreset(mode: WidgetSizeMode) {
 }
 
 export async function hideToTray() {
-  await getCurrentWindow().hide().catch(() => undefined)
+  try {
+    await getCurrentWindow().hide()
+  } catch {
+    await invoke("hide_widget").catch(() => undefined)
+  }
 }

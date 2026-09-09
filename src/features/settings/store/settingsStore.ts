@@ -12,7 +12,7 @@ const defaults: AppSettings = {
   alwaysOnTop: true,
   lockPosition: false,
   snapToEdge: true,
-  hideFromTaskbar: false,
+  hideFromTaskbar: true,
   sizeMode: "medium",
   appearance: "dark",
   opacity: 0.92,
