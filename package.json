@@ -10,9 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc -b --noEmit",
-    "tauri": "set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%&& tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri": "set PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;%PATH%&& call \"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat\" -arch=x64 && set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%&& tauri",
+    "tauri:dev": "pnpm tauri dev",
+    "tauri:build": "pnpm tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

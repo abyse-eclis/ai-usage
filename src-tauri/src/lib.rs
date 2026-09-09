@@ -7,9 +7,10 @@ use tauri::{
     WebviewWindow,
 };
 
-const SMALL_SIZE: (f64, f64) = (320.0, 240.0);
-const MEDIUM_SIZE: (f64, f64) = (420.0, 560.0);
-const LARGE_SIZE: (f64, f64) = (640.0, 760.0);
+const WIDGET_STATE_VERSION: u32 = 2;
+const SMALL_SIZE: (f64, f64) = (260.0, 180.0);
+const MEDIUM_SIZE: (f64, f64) = (320.0, 420.0);
+const LARGE_SIZE: (f64, f64) = (460.0, 600.0);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +24,7 @@ struct WidgetBounds {
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WidgetState {
+    layout_version: Option<u32>,
     bounds: Option<WidgetBounds>,
     always_on_top: Option<bool>,
 }
@@ -106,6 +108,7 @@ fn save_widget_state<R: Runtime>(
     let position = window.outer_position()?;
     let size = window.outer_size()?;
     let mut state = read_widget_state(app);
+    state.layout_version = Some(WIDGET_STATE_VERSION);
     state.bounds = Some(WidgetBounds {
         x: position.x,
         y: position.y,
@@ -138,7 +141,7 @@ fn bounds_are_visible<R: Runtime>(app: &AppHandle<R>, bounds: WidgetBounds) -> b
 fn default_top_right_position<R: Runtime>(
     window: &WebviewWindow<R>,
     width: u32,
-    height: u32,
+    _height: u32,
 ) -> Option<PhysicalPosition<i32>> {
     let monitor = window.current_monitor().ok().flatten().or_else(|| {
         window
@@ -158,13 +161,15 @@ fn default_top_right_position<R: Runtime>(
 
 fn restore_or_place_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
     let state = read_widget_state(app);
-    if let Some(bounds) = state
-        .bounds
-        .filter(|bounds| bounds_are_visible(app, *bounds))
-    {
-        let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
-        let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
-        return;
+    if state.layout_version == Some(WIDGET_STATE_VERSION) {
+        if let Some(bounds) = state
+            .bounds
+            .filter(|bounds| bounds_are_visible(app, *bounds))
+        {
+            let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
+            let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
+            return;
+        }
     }
 
     let scale_factor = window.scale_factor().unwrap_or(1.0);

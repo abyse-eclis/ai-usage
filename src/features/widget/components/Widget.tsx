@@ -104,41 +104,41 @@ export function Widget() {
         } as CSSProperties
       }
     >
-      <div className="flex h-full flex-col p-4">
-        <header className="drag-region mb-4 flex shrink-0 items-start justify-between gap-3">
+      <div className="flex h-full flex-col p-3">
+        <header className="drag-region mb-3 flex shrink-0 items-start justify-between gap-2">
           <div className="min-w-0">
-            <h1 className="truncate text-2xl font-semibold leading-tight text-white">AI Usage</h1>
+            <h1 className="truncate text-xl font-semibold leading-tight text-white">AI Usage</h1>
             {layoutMode !== "small" ? (
-              <p className="truncate text-sm text-[hsl(var(--color-muted))]">Track your AI usage across providers</p>
+              <p className="truncate text-xs text-[hsl(var(--color-muted))]">Track usage across providers</p>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {layoutMode !== "small" ? (
-              <div className="flex items-center gap-2 text-sm text-[hsl(var(--color-muted))]">
+              <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--color-muted))]">
                 <span className="size-2 rounded-full bg-emerald-400" />
                 Online
               </div>
             ) : null}
             <IconButton label="Refresh" onClick={() => refreshUsage(settings.demoMode)}>
-              <RefreshCw className={`size-5 ${isRefreshing ? "animate-spin" : ""}`} />
+              <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
             </IconButton>
             <IconButton label="Settings" onClick={() => setSettingsOpen((open) => !open)}>
-              <Settings className="size-5" />
+              <Settings className="size-4" />
             </IconButton>
             <IconButton label="Hide to tray" onClick={hideToTray}>
-              <X className="size-5" />
+              <X className="size-4" />
             </IconButton>
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 gap-3" style={{ gridTemplateColumns: settingsOpen && layoutMode === "large" ? "1fr 280px" : "1fr" }}>
+        <div className="grid min-h-0 flex-1 gap-2.5" style={{ gridTemplateColumns: settingsOpen && layoutMode === "large" ? "1fr 240px" : "1fr" }}>
           <div className="no-scrollbar min-h-0 overflow-y-auto">
             {layoutMode === "small" ? <SmallUsageList /> : <FullUsageList detailed={layoutMode === "large"} />}
           </div>
           <SettingsPanel open={settingsOpen} />
         </div>
 
-        <footer className="mt-4 flex shrink-0 items-center justify-between border-t border-white/10 pt-3 text-xs text-[hsl(var(--color-muted))]">
+        <footer className="mt-3 flex shrink-0 items-center justify-between border-t border-white/10 pt-2.5 text-xs text-[hsl(var(--color-muted))]">
           <span>
             {refreshFailed ? "Refresh failed" : "Updated"} {latestUpdatedAt ? formatClock(latestUpdatedAt) : "--:--"}
           </span>
@@ -162,15 +162,15 @@ export function Widget() {
 function SmallUsageList() {
   const usage = useUsageStore((state) => state.usage)
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {providerOrder.map((id) => {
         const providerUsage = usage[id]
         if (!providerUsage) return null
         const limit = primaryLimit(providerUsage.limits)
         const accent = id === "claude" ? "hsl(var(--accent-claude))" : id === "codex" ? "hsl(var(--accent-codex))" : "hsl(var(--accent-chatgpt))"
         return (
-          <div key={id} className="rounded-[8px] border border-white/10 bg-white/[0.045] p-3">
-            <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
+          <div key={id} className="rounded-[8px] border border-white/10 bg-white/[0.045] p-2.5">
+            <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium">
               <span>{providerUsage.provider === "chatgpt" ? "ChatGPT" : providerUsage.provider.charAt(0).toUpperCase() + providerUsage.provider.slice(1)}</span>
               <span>{limit?.usedPercent ?? 0}%</span>
             </div>
@@ -185,7 +185,7 @@ function SmallUsageList() {
 function FullUsageList({ detailed }: { detailed: boolean }) {
   const usage = useUsageStore((state) => state.usage)
   return (
-    <div className={detailed ? "grid gap-3 @container md:grid-cols-2" : "space-y-3"}>
+    <div className={detailed ? "grid gap-2.5 @container md:grid-cols-2" : "space-y-2.5"}>
       {providerOrder.map((id) => (usage[id] ? <ProviderCard key={id} usage={usage[id]!} detailed={detailed} /> : null))}
     </div>
   )
@@ -195,7 +195,7 @@ function IconButton({ label, children, onClick }: { label: string; children: Rea
   return (
     <button
       type="button"
-      className="grid size-10 place-items-center rounded-[8px] bg-white/8 text-[hsl(var(--color-text))] outline-none transition hover:bg-white/14 focus-visible:ring-2 focus-visible:ring-sky-300"
+      className="grid size-8 place-items-center rounded-[8px] bg-white/8 text-[hsl(var(--color-text))] outline-none transition hover:bg-white/14 focus-visible:ring-2 focus-visible:ring-sky-300"
       aria-label={label}
       title={label}
       onClick={onClick}
@@ -209,7 +209,7 @@ function PresetButton({ label, active, onClick }: { label: string; active: boole
   return (
     <button
       type="button"
-      className={`grid size-7 place-items-center rounded-[7px] text-[10px] outline-none transition focus-visible:ring-2 focus-visible:ring-sky-300 ${
+      className={`grid size-6 place-items-center rounded-[7px] text-[9px] outline-none transition focus-visible:ring-2 focus-visible:ring-sky-300 ${
         active ? "bg-white/16 text-white" : "bg-transparent text-[hsl(var(--color-muted))] hover:bg-white/10"
       }`}
       title={label}
