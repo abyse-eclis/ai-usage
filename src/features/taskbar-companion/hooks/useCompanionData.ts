@@ -1,8 +1,9 @@
 import { emit, listen } from "@tauri-apps/api/event"
 import { useEffect, useMemo, useState } from "react"
+import type { ProviderId, ProviderUsage } from "../../../shared/types/usage"
 import { useSettingsStore } from "../../settings/store/settingsStore"
 import { useUsageStore, type UsageStateSnapshot } from "../../widget/store/usageStore"
-import { buildClaudeCompanionData } from "../utils/taskbarCompanion"
+import { buildCompanionData } from "../utils/taskbarCompanion"
 
 /**
  * Both the companion and its hover popup read the single usage store that the
@@ -11,8 +12,8 @@ import { buildClaudeCompanionData } from "../utils/taskbarCompanion"
  */
 export function useCompanionData() {
   const { settings } = useSettingsStore()
-  const usage = useUsageStore((state) => state.usage.claude)
-  const cached = useUsageStore((state) => state.cache.claude?.usage)
+  const usage = useUsageStore((state) => state.usage)
+  const cacheRecords = useUsageStore((state) => state.cache)
   const refreshFailed = useUsageStore((state) => state.refreshFailed)
   const applySnapshot = useUsageStore((state) => state.applySnapshot)
   const companion = settings.taskbarCompanion
@@ -32,31 +33,34 @@ export function useCompanionData() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const data = useMemo(
-    () =>
-      buildClaudeCompanionData({
-        usage,
-        cached,
-        refreshFailed,
-        timeFormat: companion.timeFormat,
-        show: {
-          showFiveHour: companion.showFiveHour,
-          showWeekly: companion.showWeekly,
-          showFable: companion.showFable
-        }
-      }),
-    // `minute` is a deliberate cache-buster for the relative timestamps.
-    [
-      cached,
-      companion.showFable,
-      companion.showFiveHour,
-      companion.showWeekly,
-      companion.timeFormat,
-      minute,
+  const data = useMemo(() => {
+    const cache: Partial<Record<ProviderId, ProviderUsage>> = {}
+    for (const [provider, record] of Object.entries(cacheRecords)) {
+      if (record) cache[provider as ProviderId] = record.usage
+    }
+
+    return buildCompanionData({
+      usage,
+      cache,
       refreshFailed,
-      usage
-    ]
-  )
+      timeFormat: companion.timeFormat,
+      show: {
+        showFiveHour: companion.showFiveHour,
+        showWeekly: companion.showWeekly,
+        showFable: companion.showFable
+      }
+    })
+    // `minute` is a deliberate cache-buster for the relative timestamps.
+  }, [
+    cacheRecords,
+    companion.showFable,
+    companion.showFiveHour,
+    companion.showWeekly,
+    companion.timeFormat,
+    minute,
+    refreshFailed,
+    usage
+  ])
 
   return { data, settings, companion }
 }

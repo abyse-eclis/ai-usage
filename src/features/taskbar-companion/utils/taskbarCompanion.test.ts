@@ -3,6 +3,7 @@ import type { ProviderUsage } from "../../../shared/types/usage"
 import { normalizeLimit } from "../../../shared/utils/usage"
 import {
   buildClaudeCompanionData,
+  buildCompanionData,
   formatCompanionReset,
   usedToRemainingPercent
 } from "./taskbarCompanion"
@@ -63,6 +64,7 @@ describe("taskbar companion formatting", () => {
       show: { showFiveHour: true, showWeekly: true, showFable: true }
     })
 
+    expect(data.provider).toBe("claude")
     expect(data.primary?.remainingPercent).toBe(45)
   })
 
@@ -87,8 +89,8 @@ describe("taskbar companion formatting", () => {
     })
 
     expect(data.rows.map((row) => [row.label, row.remainingPercent])).toEqual([
-      ["5h", 45],
-      ["wly", 60],
+      ["5-hour", 45],
+      ["weekly", 60],
       ["fable", 72]
     ])
     expect(data.checkedText).toBe("Checked 2m ago")
@@ -118,5 +120,83 @@ describe("taskbar companion formatting", () => {
 
     expect(cached.checkedText).toBe(`Cached ${"\u00b7"} 8m ago`)
     expect(failed.checkedText).toBe(`Failed ${"\u00b7"} checked 8m ago`)
+  })
+
+  it("builds one summary segment per provider that reported usage", () => {
+    const now = new Date("2026-09-10T04:00:00.000Z")
+    const data = buildCompanionData({
+      usage: {
+        claude: {
+          provider: "claude",
+          status: "connected",
+          updatedAt: now.toISOString(),
+          lastSuccessfulAt: now.toISOString(),
+          limits: [
+            normalizeLimit({
+              id: "five-hour",
+              label: "Session (5h)",
+              period: "session",
+              usedPercent: 10,
+              resetAt: "2026-09-10T16:00:00.000+07:00"
+            })
+          ]
+        },
+        chatgpt: {
+          provider: "chatgpt",
+          status: "connected",
+          updatedAt: now.toISOString(),
+          lastSuccessfulAt: now.toISOString(),
+          limits: [
+            normalizeLimit({
+              id: "gpt-pro",
+              label: "GPT Pro",
+              period: "weekly",
+              used: 31,
+              total: 50,
+              unit: "messages",
+              resetAt: "2026-09-16T15:00:00.000+07:00"
+            })
+          ]
+        }
+      },
+      cache: {},
+      refreshFailed: false,
+      now,
+      show: { showFiveHour: true, showWeekly: true, showFable: true }
+    })
+
+    // Percent limits read as a percentage; counted limits read as a count.
+    expect(data.providers.map((entry) => [entry.provider, entry.primary?.valueText])).toEqual([
+      ["claude", "90%"],
+      ["chatgpt", "19"]
+    ])
+    expect(data.providers.map((entry) => entry.primary?.resetText)).toEqual(["16:00", "Wed 15:00"])
+  })
+
+  it("drops providers that reported nothing instead of leaving a blank slot", () => {
+    const now = new Date("2026-09-10T04:00:00.000Z")
+    const data = buildCompanionData({
+      usage: {
+        claude: {
+          provider: "claude",
+          status: "connected",
+          updatedAt: now.toISOString(),
+          lastSuccessfulAt: now.toISOString(),
+          limits: [normalizeLimit({ id: "five-hour", label: "Session", period: "session", usedPercent: 10 })]
+        },
+        chatgpt: {
+          provider: "chatgpt",
+          status: "disconnected",
+          updatedAt: now.toISOString(),
+          limits: []
+        }
+      },
+      cache: {},
+      refreshFailed: false,
+      now,
+      show: { showFiveHour: true, showWeekly: true, showFable: true }
+    })
+
+    expect(data.providers.map((entry) => entry.provider)).toEqual(["claude"])
   })
 })

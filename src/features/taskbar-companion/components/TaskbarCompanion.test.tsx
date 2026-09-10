@@ -65,6 +65,22 @@ describe("TaskbarCompanion", () => {
             normalizeLimit({ id: "seven-day", label: "Weekly", period: "weekly", usedPercent: 40 }),
             normalizeLimit({ id: "seven-day-fable", label: "Fable", period: "weekly", usedPercent: 28 })
           ]
+        },
+        chatgpt: {
+          provider: "chatgpt",
+          status: "connected",
+          updatedAt: "2026-09-10T04:00:00.000Z",
+          lastSuccessfulAt: "2026-09-10T03:58:00.000Z",
+          limits: [
+            normalizeLimit({
+              id: "gpt-pro",
+              label: "GPT Pro",
+              period: "weekly",
+              used: 31,
+              total: 50,
+              unit: "messages"
+            })
+          ]
         }
       },
       cache: {},
@@ -92,15 +108,63 @@ describe("TaskbarCompanion", () => {
     vi.useRealTimers()
   })
 
-  it("shows only the provider, remaining percent, and reset time", () => {
+  it("marks each provider with an image icon, not a text badge", () => {
     act(() => root.render(<TaskbarCompanion />))
 
-    expect(host.textContent).toContain("Claude")
-    // The source reports 55% used, so the companion must read 45% remaining.
+    const icons = Array.from(host.querySelectorAll("img[data-provider-icon]"))
+    expect(icons.map((icon) => icon.getAttribute("data-provider-icon"))).toEqual(["claude", "chatgpt"])
+    // Real image assets, not inline text or a CSS-only mark.
+    icons.forEach((icon) => expect(icon.getAttribute("src")).toBeTruthy())
+
+    // The provider name lives in the accessible label only -- the strip itself
+    // shows the icon, never a letter or a spelled-out name.
+    expect(host.querySelector("button")?.getAttribute("aria-label")).toBe("Claude, ChatGPT usage")
+    expect(host.textContent).not.toContain("Claude")
+    expect(host.textContent).not.toContain("ChatGPT")
+    expect(host.textContent).not.toContain("[C]")
+    expect(host.textContent).not.toContain("[G]")
+    expect(host.textContent).not.toContain("GPT")
+  })
+
+  it("keeps the icons at taskbar size and centred with the values", () => {
+    act(() => root.render(<TaskbarCompanion />))
+
+    host.querySelectorAll("img[data-provider-icon]").forEach((icon) => {
+      // 14-16px keeps the icon crisp inside the taskbar strip.
+      expect(Number(icon.getAttribute("width"))).toBeGreaterThanOrEqual(14)
+      expect(Number(icon.getAttribute("width"))).toBeLessThanOrEqual(16)
+      expect(icon.getAttribute("width")).toBe(icon.getAttribute("height"))
+      expect(icon.className).toContain("align-middle")
+      expect(icon.className).toContain("object-contain")
+    })
+  })
+
+  it("shows each provider's headline value and reset time", () => {
+    act(() => root.render(<TaskbarCompanion />))
+
+    // Claude reports 55% used, so the strip must read 45% remaining.
     expect(host.textContent).toContain("45%")
+    // ChatGPT is counted in messages: 31 of 50 used leaves 19.
+    expect(host.textContent).toContain("19")
     expect(host.textContent).not.toContain("used")
     expect(host.textContent).not.toContain("left")
     expect(host.textContent).not.toContain("AI Usage")
+  })
+
+  it("keeps the strip visible with a dash when no provider has data", () => {
+    useUsageStore.setState({ usage: {}, cache: {}, refreshFailed: false })
+    act(() => root.render(<TaskbarCompanion />))
+
+    expect(host.querySelector("button")).not.toBeNull()
+    expect(host.querySelectorAll("img[data-provider-icon]").length).toBe(1)
+    expect(host.textContent).toContain("--")
+    expect(host.textContent).not.toContain("[C]")
+  })
+
+  it("resizes the native strip to the width its segments measure", () => {
+    act(() => root.render(<TaskbarCompanion />))
+
+    expect(commandsCalled()).toContain("set_companion_content_width")
   })
 
   it("opens the native popup on hover and closes it after the delay", () => {

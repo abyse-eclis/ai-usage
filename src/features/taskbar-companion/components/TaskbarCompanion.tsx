@@ -9,17 +9,20 @@ import {
   setCompanionPopupPinned,
   showCompanionPopup
 } from "../services/companionPopup"
-import { positionTaskbarCompanion } from "../services/taskbarCompanionWindow"
+import { positionTaskbarCompanion, setCompanionContentWidth } from "../services/taskbarCompanionWindow"
 import { useCompanionData } from "../hooks/useCompanionData"
 import { companionLog } from "../utils/log"
-import { formatRemaining } from "../utils/taskbarCompanion"
+import type { CompanionProviderData } from "../utils/taskbarCompanion"
+import { ProviderIcon } from "../../../shared/components/ProviderIcon"
 
 const closeDelayMs = 300
 
 /**
- * The strip that sits inside the Windows taskbar. It shows one line -- provider,
- * remaining percent for the 5-hour window, and when that window resets -- and
- * owns the hover state for the separate detail popup window.
+ * The strip that sits inside the Windows taskbar. It shows one segment per
+ * provider -- the provider's icon, its headline remaining value, and when that
+ * window resets -- and owns the hover state for the separate detail popup.
+ *
+ * Providers are identified by their image icon only. No letter badges.
  */
 export function TaskbarCompanion() {
   const { data, companion } = useCompanionData()
@@ -27,10 +30,12 @@ export function TaskbarCompanion() {
   const [overPopup, setOverPopup] = useState(false)
   const [pinned, setPinned] = useState(false)
   const dismissedAt = useRef(0)
+  const content = useRef<HTMLSpanElement | null>(null)
   /** Size the popup window is currently showing at, or undefined while hidden. */
   const shownAs = useRef<string | undefined>(undefined)
 
-  const rowCount = data.rows.length
+  const providers = data.providers
+  const rowCount = providers.reduce((total, entry) => total + entry.rows.length, 0)
   const open = pinned || (companion.hoverPopupEnabled && (overCompanion || overPopup))
 
   useEffect(() => {
@@ -40,6 +45,15 @@ export function TaskbarCompanion() {
     window.addEventListener("resize", onResize)
     return () => window.removeEventListener("resize", onResize)
   }, [])
+
+  // The strip grows with the number of provider segments, so the native window
+  // is resized to fit them. The rendered content is measured where the layout
+  // engine can report it, and estimated from the segments where it cannot.
+  useEffect(() => {
+    const measured = content.current?.scrollWidth ?? 0
+    const width = (measured > 0 ? measured : estimateContentWidth(providers)) + stripPaddingPx
+    setCompanionContentWidth(width).catch(() => undefined)
+  }, [providers])
 
   // One hover state for both windows, fed by the cursor watcher in Rust. That
   // is what lets the pointer travel from the companion into the popup (and
@@ -68,7 +82,7 @@ export function TaskbarCompanion() {
   // pointer, which makes the webview report a bogus mouse leave and closes it
   // again. So only ever show it when it is actually closed or has resized.
   useEffect(() => {
-    const size = companionPopupSize(rowCount)
+    const size = companionPopupSize(rowCount, providers.length)
     const key = `${size.width}x${size.height}`
     if (open) {
       if (shownAs.current === key) return
@@ -82,7 +96,7 @@ export function TaskbarCompanion() {
       hideCompanionPopup().catch(() => undefined)
     }, closeDelayMs)
     return () => window.clearTimeout(timer)
-  }, [open, rowCount])
+  }, [open, providers.length, rowCount])
 
   useEffect(() => {
     setCompanionPopupPinned(pinned).catch(() => undefined)
@@ -118,15 +132,12 @@ export function TaskbarCompanion() {
     })
   }, [companion.clickToPinEnabled])
 
-  const primary = data.primary
-  const percentColor = remainingColor(primary?.remainingPercent)
-
   return (
     <main data-taskbar-companion-root className="h-full w-full">
       <button
         type="button"
-        className="flex h-full w-full items-center gap-[9px] rounded-[6px] border border-white/[0.06] bg-[#1c1c1c]/[0.94] px-[11px] text-[13.5px] leading-none text-[#e8e8e8] outline-none transition-colors duration-150 hover:bg-[#2f2f2f]/[0.96] focus-visible:outline-none"
-        aria-label="Claude usage"
+        className="flex h-full w-full items-center gap-[12px] rounded-[6px] border border-white/[0.06] bg-[#1c1c1c]/[0.94] px-[10px] text-[13.5px] leading-none text-[#e8e8e8] outline-none transition-colors duration-150 hover:bg-[#2f2f2f]/[0.96] focus-visible:outline-none"
+        aria-label={summaryLabel(providers)}
         aria-expanded={open}
         onMouseEnter={() => {
           // Fast path so the popup appears without waiting for the next poll;
@@ -136,14 +147,66 @@ export function TaskbarCompanion() {
         }}
         onClick={onClick}
       >
-        <span className="font-medium">Claude</span>
-        <span className={`text-[14.5px] font-semibold tabular-nums ${percentColor}`}>
-          {formatRemaining(primary?.remainingPercent)}
+        <span ref={content} className="flex items-center gap-[12px]">
+          {providers.length > 0 ? (
+            providers.map((entry) => <CompanionSegment key={entry.provider} entry={entry} />)
+          ) : (
+            // Nothing to report yet: the strip keeps its icon and shows a dash,
+            // so the companion never blinks out of the taskbar.
+            <span className="flex items-center gap-[6px]">
+              <ProviderIcon provider="claude" size={16} surface="dark" />
+              <span className="tabular-nums text-[#a9a9a9]">--</span>
+            </span>
+          )}
         </span>
-        <span className="tabular-nums text-[#a9a9a9]">{primary?.resetText ?? "--"}</span>
       </button>
     </main>
   )
+}
+
+function CompanionSegment({ entry }: { entry: CompanionProviderData }) {
+  const primary = entry.primary
+
+  return (
+    <span className="flex shrink-0 items-center gap-[6px]" data-companion-segment={entry.provider}>
+      <ProviderIcon provider={entry.provider} size={16} surface="dark" />
+      <span className={`text-[14.5px] font-semibold tabular-nums ${remainingColor(primary?.remainingPercent)}`}>
+        {primary?.valueText ?? "--"}
+      </span>
+      <span className="tabular-nums text-[#a9a9a9]">{primary?.resetText ?? "--"}</span>
+    </span>
+  )
+}
+
+/** Horizontal padding plus borders of the strip button, in CSS pixels. */
+const stripPaddingPx = 22
+const iconWidthPx = 16
+const segmentGapPx = 12
+const innerGapPx = 6
+/** Rough advance widths for the two type sizes the strip uses. */
+const valueCharPx = 8.5
+const resetCharPx = 7.5
+
+/**
+ * Width the segments need when the layout engine cannot be asked (the first
+ * paint, and any headless render). Deliberately generous: an over-wide strip
+ * just leaves a little slack, while a short one clips the reset time.
+ */
+function estimateContentWidth(providers: CompanionProviderData[]) {
+  if (providers.length === 0) return iconWidthPx + innerGapPx + 2 * valueCharPx
+  const segments = providers.map((entry) => {
+    const value = entry.primary?.valueText ?? "--"
+    const reset = entry.primary?.resetText ?? "--"
+    return iconWidthPx + innerGapPx + value.length * valueCharPx + innerGapPx + reset.length * resetCharPx
+  })
+  const total = segments.reduce((sum, width) => sum + width, 0)
+  return Math.ceil(total + (providers.length - 1) * segmentGapPx)
+}
+
+/** The icons carry the identity visually; screen readers get the names here. */
+function summaryLabel(providers: CompanionProviderData[]) {
+  if (providers.length === 0) return "AI usage"
+  return `${providers.map((entry) => entry.providerLabel).join(", ")} usage`
 }
 
 export function remainingColor(remainingPercent?: number) {

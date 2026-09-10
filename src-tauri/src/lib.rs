@@ -16,6 +16,10 @@ const MEDIUM_SIZE: (f64, f64) = (250.0, 240.0);
 const LARGE_SIZE: (f64, f64) = (300.0, 360.0);
 const COLLAPSED_SIZE: (f64, f64) = (32.0, 64.0);
 const TASKBAR_COMPANION_SIZE: (f64, f64) = (190.0, 44.0);
+/// Bounds for the content-measured strip width, so one provider segment stays
+/// legible and several never take over the whole taskbar.
+const COMPANION_MIN_WIDTH: f64 = 96.0;
+const COMPANION_MAX_WIDTH: f64 = 520.0;
 /// Logical padding kept between the companion and the taskbar's own edges, so
 /// the companion always sits *inside* the taskbar strip and never overhangs it.
 const COMPANION_TASKBAR_MARGIN: f64 = 3.0;
@@ -93,6 +97,9 @@ struct AppState {
     /// Whether the popup is pinned open by a click, which is when Escape and
     /// click-outside have to be watched for.
     popup_pinned: Mutex<bool>,
+    /// Logical width the companion webview measured for its provider segments.
+    /// `None` until the strip has rendered, which keeps the default width.
+    companion_content_width: Mutex<Option<f64>>,
     edge_dock_check_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
 }
 
@@ -315,7 +322,7 @@ struct CompanionPlacement {
 /// Where the companion goes *inside* a real taskbar rect: hugging the left end
 /// (Windows 11's Widgets/News strip), vertically centred, and never taller
 /// than the taskbar itself.
-fn companion_placement(info: &taskbar::TaskbarInfo) -> CompanionPlacement {
+fn companion_placement(info: &taskbar::TaskbarInfo, content_width: f64) -> CompanionPlacement {
     let scale = if info.scale > 0.1 { info.scale } else { 1.0 };
     let margin = (COMPANION_TASKBAR_MARGIN * scale).round() as i32;
     let inset = (COMPANION_LEFT_INSET * scale).round() as i32;
@@ -324,7 +331,7 @@ fn companion_placement(info: &taskbar::TaskbarInfo) -> CompanionPlacement {
     let (x, y, width, height) = match info.edge {
         taskbar::TaskbarEdge::Bottom | taskbar::TaskbarEdge::Top => {
             let height = (info.height - margin * 2).max(min_thickness).min(info.height);
-            let width = ((TASKBAR_COMPANION_SIZE.0 * scale).round() as i32).min(info.width.max(1));
+            let width = ((content_width * scale).round() as i32).min(info.width.max(1));
             let x = info.x + inset;
             let y = info.y + (info.height - height) / 2;
             (x, y, width, height)
@@ -363,6 +370,39 @@ fn preferred_taskbar(app: &AppHandle) -> Option<taskbar::TaskbarInfo> {
     found
 }
 
+/// Width the strip should use: whatever the webview last measured for its
+/// provider segments, clamped so a bad measurement cannot swallow the taskbar
+/// or shrink the strip to nothing. Falls back to the default width.
+fn companion_content_width(app: &AppHandle) -> f64 {
+    let measured = app
+        .try_state::<AppState>()
+        .and_then(|state| state.companion_content_width.lock().ok().map(|value| *value))
+        .flatten();
+    measured
+        .filter(|width| width.is_finite())
+        .map(|width| width.clamp(COMPANION_MIN_WIDTH, COMPANION_MAX_WIDTH))
+        .unwrap_or(TASKBAR_COMPANION_SIZE.0)
+}
+
+/// Records the width the companion webview measured for its provider segments
+/// and re-places the window so the strip grows and shrinks with its content.
+#[tauri::command]
+fn set_companion_content_width(app: AppHandle, width: f64) -> Result<(), String> {
+    if !width.is_finite() || width <= 0.0 {
+        return Ok(());
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.companion_content_width.lock() {
+            let next = Some(width);
+            if *guard == next {
+                return Ok(());
+            }
+            *guard = next;
+        }
+    }
+    position_taskbar_companion(app)
+}
+
 /// Fallback for the (non-Windows / no taskbar found) case: bottom-left of the
 /// work area, the closest thing to "on the taskbar" without the shell APIs.
 fn fallback_placement(app: &AppHandle) -> Result<CompanionPlacement, String> {
@@ -377,7 +417,7 @@ fn fallback_placement(app: &AppHandle) -> Result<CompanionPlacement, String> {
         })
         .ok_or_else(|| "No monitor is available for the taskbar companion.".to_string())?;
     let scale = monitor.scale_factor();
-    let width = (TASKBAR_COMPANION_SIZE.0 * scale).round() as u32;
+    let width = (companion_content_width(app) * scale).round() as u32;
     let height = (TASKBAR_COMPANION_SIZE.1 * scale).round() as u32;
     let margin = (COMPANION_LEFT_INSET * scale).round() as i32;
     let area = monitor.work_area();
@@ -393,7 +433,7 @@ fn fallback_placement(app: &AppHandle) -> Result<CompanionPlacement, String> {
 #[tauri::command]
 fn position_taskbar_companion(app: AppHandle) -> Result<(), String> {
     let placement = match preferred_taskbar(&app) {
-        Some(info) => companion_placement(&info),
+        Some(info) => companion_placement(&info, companion_content_width(&app)),
         None => fallback_placement(&app)?,
     };
     apply_companion_placement(&app, placement, true)
@@ -456,7 +496,7 @@ fn watch_taskbar(app: AppHandle) {
             continue;
         }
         let placement = match preferred_taskbar(&app) {
-            Some(info) => companion_placement(&info),
+            Some(info) => companion_placement(&info, companion_content_width(&app)),
             None => match fallback_placement(&app) {
                 Ok(value) => value,
                 Err(_) => continue,
@@ -1454,6 +1494,7 @@ pub fn run() {
             companion_placement: Mutex::new(None),
             companion_monitor: Mutex::new(None),
             popup_pinned: Mutex::new(false),
+            companion_content_width: Mutex::new(None),
             edge_dock_check_item: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
@@ -1472,6 +1513,7 @@ pub fn run() {
             get_taskbar_info,
             list_taskbars,
             set_taskbar_monitor,
+            set_companion_content_width,
             show_companion_popup,
             hide_companion_popup,
             dismiss_companion_popup,

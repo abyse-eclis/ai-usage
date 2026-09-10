@@ -20,10 +20,21 @@ export interface PointerState {
 export const popupDismissEvent = "companion-popup-dismiss"
 export const popupPinnedEvent = "companion-popup-pinned"
 
-/** Kept in one place so the companion (which asks for the window) and the popup (which fills it) agree. */
-export function companionPopupSize(rowCount: number) {
+/**
+ * Kept in one place so the companion (which asks for the window) and the popup
+ * (which fills it) agree. The popup stacks one icon-headed section per
+ * provider, so both the row count and the provider count set the height.
+ */
+export function companionPopupSize(rowCount: number, providerCount = 1) {
   const rows = Math.max(1, rowCount)
-  return { width: 248, height: 24 + 20 + 8 + rows * 21 + 10 + 14 }
+  const sections = Math.max(1, providerCount)
+  const padding = 24
+  const legend = 18
+  const headers = sections * 28
+  const footer = 24
+  // Wide enough for a spelled-out window name, a value with its unit, and a
+  // reset stamp carrying a weekday.
+  return { width: 288, height: padding + legend + headers + rows * 21 + footer }
 }
 
 export async function showCompanionPopup(size: { width: number; height: number }) {

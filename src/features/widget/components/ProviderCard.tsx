@@ -1,4 +1,5 @@
 import { CircleAlert } from "lucide-react"
+import { ProviderIcon } from "../../../shared/components/ProviderIcon"
 import type { ProviderUsage, UsageLimit } from "../../../shared/types/usage"
 import { formatClock } from "../../../shared/utils/time"
 import { getUsageSeverity } from "../../../shared/utils/thresholds"
@@ -22,7 +23,10 @@ export function ProviderCard({ usage, mode }: ProviderCardProps) {
 
   return (
     <section className="border-b border-white/10 py-[7px] last:border-b-0">
-      <h2 className="mb-1 truncate text-[11.5px] font-semibold leading-tight text-[hsl(var(--color-text))]">{names[usage.provider]}</h2>
+      <h2 className="mb-1 flex items-center gap-1.5 truncate text-[11.5px] font-semibold leading-tight text-[hsl(var(--color-text))]">
+        <ProviderIcon provider={usage.provider} size={14} />
+        <span className="truncate">{names[usage.provider]}</span>
+      </h2>
       {usage.status === "connected" ? (
         <div className="space-y-1">
           {usage.limits.slice(0, visibleLimits).map((limit, index) => (

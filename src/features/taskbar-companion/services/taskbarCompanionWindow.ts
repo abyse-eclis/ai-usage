@@ -24,6 +24,15 @@ export async function positionTaskbarCompanion() {
   return invoke("position_taskbar_companion").catch(() => undefined)
 }
 
+/**
+ * The strip is as wide as its provider segments need. The webview measures its
+ * own content and reports it here; Rust keeps the window inside the taskbar.
+ */
+export async function setCompanionContentWidth(width: number) {
+  if (!Number.isFinite(width) || width <= 0) return
+  return invoke("set_companion_content_width", { width: Math.ceil(width) }).catch(() => undefined)
+}
+
 /** The taskbar the companion is currently docked to, straight from the shell. */
 export async function getTaskbarInfo() {
   return invoke<TaskbarInfo | null>("get_taskbar_info").catch(() => null)

@@ -73,12 +73,56 @@ describe("CompanionPopup", () => {
     act(() => root.render(<CompanionPopup />))
 
     expect(host.textContent).toContain("Claude")
-    expect(host.textContent).toContain("5h")
+    expect(host.textContent).not.toContain("[C]")
+    expect(host.textContent).not.toContain("[G]")
+    // Window names are spelled out, not abbreviated to "5h" / "wly".
+    expect(host.textContent).toContain("5-hour")
     expect(host.textContent).toContain("45%")
-    expect(host.textContent).toContain("wly")
+    expect(host.textContent).toContain("weekly")
     expect(host.textContent).toContain("60%")
     expect(host.textContent).toContain("fable")
     expect(host.textContent).toContain("72%")
+    expect(host.textContent).not.toContain("5h ")
+    expect(host.textContent).not.toContain("wly")
+  })
+
+  it("names what each column holds so a bare number is never ambiguous", () => {
+    act(() => root.render(<CompanionPopup />))
+
+    expect(host.textContent).toContain("Window")
+    expect(host.textContent).toContain("Remaining")
+    expect(host.textContent).toContain("Resets")
+  })
+
+  it("heads each provider section with its image icon next to the name", () => {
+    useUsageStore.setState((state) => ({
+      usage: {
+        ...state.usage,
+        chatgpt: {
+          provider: "chatgpt",
+          status: "connected",
+          updatedAt: "2026-09-10T04:00:00.000Z",
+          lastSuccessfulAt: "2026-09-10T03:58:00.000Z",
+          limits: [
+            normalizeLimit({ id: "gpt-pro", label: "GPT Pro", period: "weekly", used: 31, total: 50, unit: "messages" })
+          ]
+        }
+      }
+    }))
+    act(() => root.render(<CompanionPopup />))
+
+    const icons = Array.from(host.querySelectorAll("img[data-provider-icon]"))
+    expect(icons.map((icon) => icon.getAttribute("data-provider-icon"))).toEqual(["claude", "chatgpt"])
+    icons.forEach((icon) => expect(icon.getAttribute("src")).toBeTruthy())
+
+    // Names are spelled out here (unlike the strip), but never as the badge.
+    expect(host.textContent).toContain("Claude")
+    expect(host.textContent).toContain("ChatGPT")
+    expect(host.textContent).not.toContain("[C]")
+    expect(host.textContent).not.toContain("[G]")
+    // 31 of 50 messages used leaves 19, and the popup says what 19 counts.
+    expect(host.textContent).toContain("19")
+    expect(host.textContent).toContain("msgs")
   })
 
   it("asks the companion to dismiss on Escape", () => {
