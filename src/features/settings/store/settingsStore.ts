@@ -25,14 +25,23 @@ const defaults: AppSettings = {
   thresholds: defaultThresholds,
   notificationsEnabled: true,
   taskbarCompanion: {
-    enabled: false,
     primaryProvider: "claude",
     timeFormat: "24-hour",
     hoverPopupEnabled: true,
     clickToPinEnabled: true,
     showFiveHour: true,
     showWeekly: true,
-    showFable: true
+    showFable: true,
+    taskbarMonitorId: ""
+  },
+  // Presentation modes are independent windows. This is the local mirror of
+  // Rust's persisted state (the actual source of truth for visibility); it
+  // is hydrated/kept in sync via windowManager's restorePresentationState
+  // and the "presentation-state-changed" event so Settings UI stays live.
+  presentation: {
+    mainWidgetEnabled: false,
+    taskbarCompanionEnabled: true,
+    edgeDockEnabled: false
   }
 }
 
@@ -54,18 +63,31 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: "ai-usage-settings",
-      version: 4,
+      version: 6,
       // v1 shipped with demo mode forced on. Clear that stored preference once so
       // existing installs land on the real providers.
       migrate: (persisted, version) => {
         const state = persisted as { settings?: AppSettings } | undefined
         if (!state?.settings) return state
+        const legacyTaskbarCompanion = state.settings.taskbarCompanion as
+          | (Partial<AppSettings["taskbarCompanion"]> & { enabled?: boolean })
+          | undefined
         const settings = {
           ...state.settings,
           autoCollapseWhenDocked: state.settings.autoCollapseWhenDocked ?? defaults.autoCollapseWhenDocked,
           taskbarCompanion: {
             ...defaults.taskbarCompanion,
-            ...state.settings.taskbarCompanion
+            ...legacyTaskbarCompanion
+          },
+          // v5 splits window visibility ("presentation") out from feature
+          // settings. Carry forward the old taskbarCompanion.enabled flag if
+          // this install predates that split.
+          presentation: {
+            ...defaults.presentation,
+            ...state.settings.presentation,
+            ...(version < 5 && legacyTaskbarCompanion?.enabled !== undefined
+              ? { taskbarCompanionEnabled: legacyTaskbarCompanion.enabled }
+              : {})
           }
         }
         if (version < 2) settings.demoMode = envDemo

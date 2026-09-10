@@ -1,5 +1,18 @@
-import { Bell, Monitor, Palette, Plug, Settings, SlidersHorizontal } from "lucide-react"
+import { Bell, LayoutPanelLeft, Monitor, Palette, Plug, Settings, SlidersHorizontal } from "lucide-react"
 import type { ReactNode } from "react"
+import { useEffect, useState } from "react"
+import {
+  listTaskbars,
+  setTaskbarMonitor,
+  type TaskbarInfo
+} from "../../taskbar-companion/services/taskbarCompanionWindow"
+import {
+  hideEdgeDock,
+  hideTaskbarCompanion,
+  setMainWidgetStartupEnabled,
+  showEdgeDock,
+  showTaskbarCompanion
+} from "../../window-manager/services/windowManager"
 import { useSettingsStore } from "../store/settingsStore"
 
 interface SettingsPanelProps {
@@ -10,6 +23,13 @@ const intervals = [1, 3, 5, 10, 15, 30] as const
 
 export function SettingsPanel({ open }: SettingsPanelProps) {
   const { settings, updateSettings } = useSettingsStore()
+  const [taskbars, setTaskbars] = useState<TaskbarInfo[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    listTaskbars().then(setTaskbars).catch(() => undefined)
+  }, [open])
+
   if (!open) return null
 
   return (
@@ -43,6 +63,35 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
         <ProviderRow name="ChatGPT" status={settings.demoMode ? "Demo connected" : "Unavailable"} />
       </Section>
 
+      <Section icon={<LayoutPanelLeft className="size-4" />} title="Presentation">
+        <Toggle
+          label="Taskbar Companion"
+          checked={settings.presentation.taskbarCompanionEnabled}
+          onChange={(enabled) => {
+            updateSettings({ presentation: { ...settings.presentation, taskbarCompanionEnabled: enabled } })
+            if (enabled) showTaskbarCompanion()
+            else hideTaskbarCompanion()
+          }}
+        />
+        <Toggle
+          label="Main Widget on startup"
+          checked={settings.presentation.mainWidgetEnabled}
+          onChange={(enabled) => {
+            updateSettings({ presentation: { ...settings.presentation, mainWidgetEnabled: enabled } })
+            setMainWidgetStartupEnabled(enabled)
+          }}
+        />
+        <Toggle
+          label="Edge Dock"
+          checked={settings.presentation.edgeDockEnabled}
+          onChange={(enabled) => {
+            updateSettings({ presentation: { ...settings.presentation, edgeDockEnabled: enabled } })
+            if (enabled) showEdgeDock()
+            else hideEdgeDock()
+          }}
+        />
+      </Section>
+
       <Section icon={<SlidersHorizontal className="size-4" />} title="Widget">
         <Toggle label="Always on top" checked={settings.alwaysOnTop} onChange={(alwaysOnTop) => updateSettings({ alwaysOnTop })} />
         <Toggle label="Lock position" checked={settings.lockPosition} onChange={(lockPosition) => updateSettings({ lockPosition })} />
@@ -56,12 +105,25 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
       </Section>
 
       <Section icon={<Monitor className="size-4" />} title="Taskbar Companion">
-        <Toggle
-          label="Enabled"
-          checked={settings.taskbarCompanion.enabled}
-          onChange={(enabled) => updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, enabled } })}
-        />
         <ProviderRow name="Primary Provider" status="Claude" />
+        <label className="field">
+          <span>Monitor</span>
+          <select
+            value={settings.taskbarCompanion.taskbarMonitorId}
+            onChange={(event) => {
+              const taskbarMonitorId = event.target.value
+              updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, taskbarMonitorId } })
+              setTaskbarMonitor(taskbarMonitorId)
+            }}
+          >
+            <option value="">Primary</option>
+            {taskbars.map((taskbar) => (
+              <option key={taskbar.monitorId} value={taskbar.monitorId}>
+                {taskbar.monitorId.replace(/^\\\\[.]\\/, "")}
+              </option>
+            ))}
+          </select>
+        </label>
         <ProviderRow name="Display" status="Claude 45% 23:00" />
         <label className="field">
           <span>Time format</span>

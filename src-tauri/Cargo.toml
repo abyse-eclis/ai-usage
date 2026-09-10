@@ -7,10 +7,17 @@ edition = "2021"
 
 [lib]
 name = "ai_usage_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop only: the staticlib/cdylib artifacts exist for mobile targets, and
+# linking them costs a lot of memory for no benefit here.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
+
+[profile.dev]
+# Full debug info makes rustc/LLVM run out of memory on smaller machines while
+# building this crate. Backtraces still carry symbol names without it.
+debug = 0
 
 [dependencies]
 tauri = { version = "2.9", features = ["tray-icon", "image-png"] }
@@ -19,3 +26,12 @@ tauri-plugin-notification = "2.4"
 tauri-plugin-opener = "2.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }

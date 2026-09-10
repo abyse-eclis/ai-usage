@@ -19,6 +19,9 @@ interface UsageStore {
   lastRefreshError?: string
   refreshUsage: (demoMode: boolean) => Promise<void>
   applySnapshot: (snapshot: UsageStateSnapshot) => void
+  /** Re-broadcasts the current snapshot so a window that opened later (the
+   * companion, the hover popup) can render without fetching anything itself. */
+  publishSnapshot: () => void
 }
 
 export const useUsageStore = create<UsageStore>()(
@@ -28,6 +31,10 @@ export const useUsageStore = create<UsageStore>()(
       cache: {},
       isRefreshing: false,
       refreshFailed: false,
+      publishSnapshot: () => {
+        const { usage, cache, refreshFailed, lastRefreshError } = get()
+        emit("usage-state-updated", { usage, cache, refreshFailed, lastRefreshError }).catch(() => undefined)
+      },
       applySnapshot: (snapshot) =>
         set({
           usage: snapshot.usage,

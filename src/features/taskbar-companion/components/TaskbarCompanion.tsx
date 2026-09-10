@@ -1,192 +1,154 @@
 import { listen } from "@tauri-apps/api/event"
-import type { CSSProperties } from "react"
-import { useEffect, useMemo, useRef, useState } from "react"
-import type { ProviderUsage, UsageCacheRecord } from "../../../shared/types/usage"
-import { useSettingsStore } from "../../settings/store/settingsStore"
-import { useUsageStore, type UsageStateSnapshot } from "../../widget/store/usageStore"
-import { hideTaskbarCompanion, positionTaskbarCompanion } from "../services/taskbarCompanionWindow"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
-  buildClaudeCompanionData,
-  formatRemaining
-} from "../utils/taskbarCompanion"
+  companionPopupSize,
+  hideCompanionPopup,
+  pointerEvent,
+  popupDismissEvent,
+  type PointerState,
+  setCompanionPopupPinned,
+  showCompanionPopup
+} from "../services/companionPopup"
+import { positionTaskbarCompanion } from "../services/taskbarCompanionWindow"
+import { useCompanionData } from "../hooks/useCompanionData"
+import { companionLog } from "../utils/log"
+import { formatRemaining } from "../utils/taskbarCompanion"
 
-const closeDelayMs = 320
+const closeDelayMs = 300
 
+/**
+ * The strip that sits inside the Windows taskbar. It shows one line -- provider,
+ * remaining percent for the 5-hour window, and when that window resets -- and
+ * owns the hover state for the separate detail popup window.
+ */
 export function TaskbarCompanion() {
-  const { settings } = useSettingsStore()
-  const usage = useUsageStore((state) => state.usage.claude)
-  const cached = useUsageStore((state) => state.cache.claude?.usage)
-  const refreshFailed = useUsageStore((state) => state.refreshFailed)
-  const applySnapshot = useUsageStore((state) => state.applySnapshot)
-  const [hovered, setHovered] = useState(false)
-  const [popupHovered, setPopupHovered] = useState(false)
+  const { data, companion } = useCompanionData()
+  const [overCompanion, setOverCompanion] = useState(false)
+  const [overPopup, setOverPopup] = useState(false)
   const [pinned, setPinned] = useState(false)
-  const closeTimer = useRef<number | undefined>(undefined)
-  const companion = settings.taskbarCompanion
+  const dismissedAt = useRef(0)
+  /** Size the popup window is currently showing at, or undefined while hidden. */
+  const shownAs = useRef<string | undefined>(undefined)
 
-  const data = useMemo(
-    () =>
-      buildClaudeCompanionData({
-        usage,
-        cached,
-        refreshFailed,
-        timeFormat: companion.timeFormat,
-        show: {
-          showFiveHour: companion.showFiveHour,
-          showWeekly: companion.showWeekly,
-          showFable: companion.showFable
-        }
-      }),
-    [cached, companion.showFable, companion.showFiveHour, companion.showWeekly, companion.timeFormat, refreshFailed, usage]
-  )
-
-  const open = pinned || (companion.hoverPopupEnabled && (hovered || popupHovered))
+  const rowCount = data.rows.length
+  const open = pinned || (companion.hoverPopupEnabled && (overCompanion || overPopup))
 
   useEffect(() => {
+    companionLog("[Companion] mounted")
     positionTaskbarCompanion().catch(() => undefined)
     const onResize = () => positionTaskbarCompanion().catch(() => undefined)
     window.addEventListener("resize", onResize)
     return () => window.removeEventListener("resize", onResize)
   }, [])
 
+  // One hover state for both windows, fed by the cursor watcher in Rust. That
+  // is what lets the pointer travel from the companion into the popup (and
+  // across the gap between them) without the popup closing underneath it.
   useEffect(() => {
-    const unlisten = listen<UsageStateSnapshot>("usage-state-updated", (event) => applySnapshot(event.payload))
+    const unlisteners = [
+      listen<PointerState>(pointerEvent, (event) => {
+        companionLog("[Companion] pointer", event.payload)
+        setOverCompanion(event.payload.overCompanion)
+        setOverPopup(event.payload.overPopup)
+      }),
+      listen(popupDismissEvent, () => {
+        companionLog("[Companion] popup dismissed")
+        dismissedAt.current = Date.now()
+        setPinned(false)
+        setOverCompanion(false)
+        setOverPopup(false)
+      })
+    ]
     return () => {
-      unlisten.then((dispose) => dispose()).catch(() => undefined)
+      unlisteners.forEach((unlisten) => unlisten.then((dispose) => dispose()).catch(() => undefined))
     }
-  }, [applySnapshot])
+  }, [])
+
+  // Re-showing a popup that is already up moves the native window under the
+  // pointer, which makes the webview report a bogus mouse leave and closes it
+  // again. So only ever show it when it is actually closed or has resized.
+  useEffect(() => {
+    const size = companionPopupSize(rowCount)
+    const key = `${size.width}x${size.height}`
+    if (open) {
+      if (shownAs.current === key) return
+      companionLog("[Companion] scheduling popup")
+      shownAs.current = key
+      showCompanionPopup(size).catch(() => undefined)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      shownAs.current = undefined
+      hideCompanionPopup().catch(() => undefined)
+    }, closeDelayMs)
+    return () => window.clearTimeout(timer)
+  }, [open, rowCount])
+
+  useEffect(() => {
+    setCompanionPopupPinned(pinned).catch(() => undefined)
+  }, [pinned])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       setPinned(false)
-      setHovered(false)
-      setPopupHovered(false)
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target
-      if (target instanceof Element && target.closest("[data-taskbar-companion-root]")) return
-      setPinned(false)
-      setHovered(false)
-      setPopupHovered(false)
+      setOverCompanion(false)
+      setOverPopup(false)
     }
     window.addEventListener("keydown", onKeyDown)
-    window.addEventListener("pointerdown", onPointerDown)
-    return () => {
-      window.removeEventListener("keydown", onKeyDown)
-      window.removeEventListener("pointerdown", onPointerDown)
-    }
+    return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
-  useEffect(() => {
-    if (settings.taskbarCompanion.enabled) return
-    setPinned(false)
-    hideTaskbarCompanion().catch(() => undefined)
-  }, [settings.taskbarCompanion.enabled])
-
-  function clearCloseTimer() {
-    if (closeTimer.current !== undefined) {
-      window.clearTimeout(closeTimer.current)
-      closeTimer.current = undefined
+  const onClick = useCallback(() => {
+    if (!companion.clickToPinEnabled) return
+    // A click that lands right after the popup dismissed itself (focus loss)
+    // is the "close it" half of the gesture, not a fresh pin.
+    if (Date.now() - dismissedAt.current < 250) {
+      setPinned(false)
+      return
     }
-  }
-
-  function scheduleClose() {
-    clearCloseTimer()
-    closeTimer.current = window.setTimeout(() => {
-      setHovered(false)
-      setPopupHovered(false)
-    }, closeDelayMs)
-  }
+    setPinned((value) => {
+      const next = !value
+      companionLog(next ? "[Companion] pinned" : "[Companion] unpinned")
+      if (!next) {
+        setOverCompanion(false)
+        setOverPopup(false)
+      }
+      return next
+    })
+  }, [companion.clickToPinEnabled])
 
   const primary = data.primary
-  const percentClass =
-    primary?.remainingPercent !== undefined && primary.remainingPercent <= 10
-      ? "text-[hsl(var(--state-critical))]"
-      : primary?.remainingPercent !== undefined && primary.remainingPercent <= 20
-        ? "text-[hsl(var(--state-warning))]"
-        : "text-white"
+  const percentColor = remainingColor(primary?.remainingPercent)
 
   return (
-    <main
-      data-taskbar-companion-root
-      className="relative h-full w-full overflow-visible text-[hsl(var(--color-text))]"
-      style={{ "--panel-opacity": settings.opacity } as CSSProperties}
-    >
+    <main data-taskbar-companion-root className="h-full w-full">
       <button
         type="button"
-        className="flex h-full w-full items-center justify-center gap-2 rounded-[9px] border border-[hsl(var(--color-border)/0.62)] bg-[hsl(var(--color-panel)/var(--panel-opacity))] px-3 text-[13.5px] leading-none shadow-[0_8px_22px_rgb(0_0_0/0.24)] outline-none transition hover:bg-[hsl(var(--color-card)/0.96)] focus-visible:ring-2 focus-visible:ring-sky-300"
+        className="flex h-full w-full items-center gap-[9px] rounded-[6px] border border-white/[0.06] bg-[#1c1c1c]/[0.94] px-[11px] text-[13.5px] leading-none text-[#e8e8e8] outline-none transition-colors duration-150 hover:bg-[#2f2f2f]/[0.96] focus-visible:outline-none"
         aria-label="Claude usage"
         aria-expanded={open}
         onMouseEnter={() => {
-          clearCloseTimer()
-          setHovered(true)
+          // Fast path so the popup appears without waiting for the next poll;
+          // the watcher stays authoritative for when it closes again.
+          companionLog("[Companion] enter")
+          setOverCompanion(true)
         }}
-        onMouseLeave={scheduleClose}
-        onClick={() => {
-          if (!companion.clickToPinEnabled) return
-          clearCloseTimer()
-          setPinned((value) => {
-            const next = !value
-            setHovered(next)
-            if (!next) setPopupHovered(false)
-            return next
-          })
-        }}
+        onClick={onClick}
       >
         <span className="font-medium">Claude</span>
-        <span className={`text-[14.5px] font-semibold tabular-nums ${percentClass}`}>{formatRemaining(primary?.remainingPercent)}</span>
-        <span className="font-normal tabular-nums text-[hsl(var(--color-muted))]">{primary?.resetText ?? "--"}</span>
+        <span className={`text-[14.5px] font-semibold tabular-nums ${percentColor}`}>
+          {formatRemaining(primary?.remainingPercent)}
+        </span>
+        <span className="tabular-nums text-[#a9a9a9]">{primary?.resetText ?? "--"}</span>
       </button>
-
-      {open ? (
-        <section
-          className="absolute bottom-[calc(100%+8px)] right-0 w-[226px] rounded-[9px] border border-[hsl(var(--color-border)/0.64)] bg-[hsl(var(--color-panel-strong)/0.98)] px-3 py-2.5 shadow-[0_12px_28px_rgb(0_0_0/0.32)]"
-          onMouseEnter={() => {
-            clearCloseTimer()
-            setPopupHovered(true)
-          }}
-          onMouseLeave={scheduleClose}
-        >
-          <h1 className="mb-2 text-[14.5px] font-semibold leading-none text-white">Claude</h1>
-          <div className="grid grid-cols-[auto_auto_1fr] gap-x-5 gap-y-1.5 text-[13.5px] leading-tight tabular-nums">
-            {data.rows.map((row) => (
-              <CompanionRow key={row.kind} row={row} />
-            ))}
-          </div>
-          <div className="mt-2.5 truncate text-[10.5px] leading-none text-[hsl(var(--color-muted-weak))]">{data.checkedText}</div>
-        </section>
-      ) : null}
     </main>
   )
 }
 
-function CompanionRow({ row }: { row: { label: string; remainingPercent?: number; resetText?: string } }) {
-  const percentClass =
-    row.remainingPercent !== undefined && row.remainingPercent <= 10
-      ? "text-[hsl(var(--state-critical))]"
-      : row.remainingPercent !== undefined && row.remainingPercent <= 20
-        ? "text-[hsl(var(--state-warning))]"
-        : "text-white"
-  return (
-    <>
-      <span className="text-[hsl(var(--color-muted))]">{row.label}</span>
-      <span className={`justify-self-end font-semibold ${percentClass}`}>{formatRemaining(row.remainingPercent)}</span>
-      <span className="justify-self-end text-[hsl(var(--color-muted))]">{row.resetText ?? "--"}</span>
-    </>
-  )
-}
-
-export function snapshotFromUsageStore({
-  usage,
-  cache,
-  refreshFailed,
-  lastRefreshError
-}: {
-  usage: Partial<Record<"claude" | "codex" | "chatgpt", ProviderUsage>>
-  cache: Partial<Record<"claude" | "codex" | "chatgpt", UsageCacheRecord>>
-  refreshFailed: boolean
-  lastRefreshError?: string
-}): UsageStateSnapshot {
-  return { usage, cache, refreshFailed, lastRefreshError }
+export function remainingColor(remainingPercent?: number) {
+  if (remainingPercent === undefined) return "text-[#a9a9a9]"
+  if (remainingPercent <= 10) return "text-[hsl(var(--state-critical))]"
+  if (remainingPercent <= 20) return "text-[hsl(var(--state-warning))]"
+  return "text-white"
 }

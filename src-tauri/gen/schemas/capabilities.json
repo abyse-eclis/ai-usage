@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default permissions for AI Usage Monitor","local":true,"windows":["main","taskbar-companion"],"permissions":["core:default","core:window:default","opener:default","notification:default","autostart:default"]}}
+{"default":{"identifier":"default","description":"Default permissions for AI Usage Monitor","local":true,"windows":["main","taskbar-companion","companion-popup"],"permissions":["core:default","core:window:default","opener:default","notification:default","autostart:default"]}}

@@ -9,7 +9,6 @@ import type { DockSide, EdgeDockState } from "../../edge-dock/types/edgeDock"
 import { notifyThresholds } from "../../notifications/services/notifications"
 import { SettingsPanel } from "../../settings/components/SettingsPanel"
 import { useSettingsStore } from "../../settings/store/settingsStore"
-import { setTaskbarCompanionVisible } from "../../taskbar-companion/services/taskbarCompanionWindow"
 import { applyWidgetPreset, hideToTray, setAlwaysOnTop, setSkipTaskbar } from "../../window-manager/services/windowManager"
 import { useContainerSize } from "../hooks/useContainerSize"
 import { useUsageStore } from "../store/usageStore"
@@ -25,6 +24,7 @@ export function Widget() {
   const [tick, setTick] = useState(0)
   const { settings, updateSettings } = useSettingsStore()
   const { usage, isRefreshing, refreshFailed, refreshUsage } = useUsageStore()
+  const publishSnapshot = useUsageStore((state) => state.publishSnapshot)
   const isCollapsed = useEdgeDockStore((state) => state.isCollapsed)
   const dockSide = useEdgeDockStore((state) => state.dockSide)
   const isDockAnimating = useEdgeDockStore((state) => state.isAnimating)
@@ -65,12 +65,11 @@ export function Widget() {
   }, [settings.hideFromTaskbar])
 
   useEffect(() => {
-    setTaskbarCompanionVisible(settings.taskbarCompanion.enabled)
-  }, [settings.taskbarCompanion.enabled])
-
-  useEffect(() => {
     const unlisteners = [
       listen("tray-refresh", () => refreshUsage(settings.demoMode)),
+      // The companion and its hover popup never fetch; they ask the one fetch
+      // loop that lives here to re-broadcast what it already has.
+      listen("usage-state-request", () => publishSnapshot()),
       listen("tray-settings", () => setSettingsOpen(true)),
       listen<EdgeDockState>("edge-dock-state", (event) => {
         applyEdgeDockState(event.payload)
@@ -88,7 +87,7 @@ export function Widget() {
         unlisten.then((dispose) => dispose()).catch(() => undefined)
       })
     }
-  }, [applyEdgeDockState, refreshUsage, settings.demoMode, updateSettings])
+  }, [applyEdgeDockState, publishSnapshot, refreshUsage, settings.demoMode, updateSettings])
 
   useEffect(() => {
     hydrateEdgeDock().catch(() => undefined)

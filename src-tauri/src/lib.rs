@@ -1,9 +1,10 @@
+mod taskbar;
 mod usage;
 
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, sync::Mutex, thread, time::Duration};
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Runtime,
     WebviewWindow,
@@ -15,6 +16,15 @@ const MEDIUM_SIZE: (f64, f64) = (250.0, 240.0);
 const LARGE_SIZE: (f64, f64) = (300.0, 360.0);
 const COLLAPSED_SIZE: (f64, f64) = (32.0, 64.0);
 const TASKBAR_COMPANION_SIZE: (f64, f64) = (190.0, 44.0);
+/// Logical padding kept between the companion and the taskbar's own edges, so
+/// the companion always sits *inside* the taskbar strip and never overhangs it.
+const COMPANION_TASKBAR_MARGIN: f64 = 3.0;
+/// Logical distance from the taskbar's left edge -- the strip Windows 11 keeps
+/// for the Widgets/News button, which this app replaces.
+const COMPANION_LEFT_INSET: f64 = 6.0;
+const COMPANION_POPUP_GAP: f64 = 6.0;
+const COMPANION_WATCH_INTERVAL_MS: u64 = 700;
+const POINTER_WATCH_INTERVAL_MS: u64 = 120;
 const SNAP_DISTANCE: f64 = 18.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -42,6 +52,23 @@ struct WidgetState {
     is_collapsed: Option<bool>,
     dock_side: Option<DockSide>,
     expanded_bounds: Option<WidgetBounds>,
+    main_widget_enabled: Option<bool>,
+    taskbar_companion_enabled: Option<bool>,
+    edge_dock_enabled: Option<bool>,
+    /// Windows display device name the companion should dock to. `None` means
+    /// "whichever monitor is primary right now".
+    taskbar_monitor_id: Option<String>,
+}
+
+/// Presentation modes are independent of one another: each window's visibility
+/// is decided from its own `enabled` flag only. Nothing here should imply that
+/// enabling one mode shows or hides another.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PresentationSnapshot {
+    main_widget_enabled: bool,
+    taskbar_companion_enabled: bool,
+    edge_dock_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,10 +79,21 @@ struct EdgeDockSnapshot {
     is_animating: bool,
 }
 
-#[derive(Debug)]
 struct AppState {
     always_on_top: Mutex<bool>,
     is_animating: Mutex<bool>,
+    open_widget_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    taskbar_check_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// Last rect the companion was moved to, so the taskbar watcher only
+    /// touches the window when the taskbar actually changed.
+    companion_placement: Mutex<Option<CompanionPlacement>>,
+    /// Monitor the companion is currently docked to, so a momentary failure to
+    /// see the primary taskbar does not move it to another screen.
+    companion_monitor: Mutex<Option<String>>,
+    /// Whether the popup is pinned open by a click, which is when Escape and
+    /// click-outside have to be watched for.
+    popup_pinned: Mutex<bool>,
+    edge_dock_check_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
 }
 
 #[tauri::command]
@@ -102,8 +140,142 @@ fn set_skip_taskbar(window: WebviewWindow, enabled: bool) -> Result<(), String> 
 }
 
 #[tauri::command]
-fn hide_widget(window: WebviewWindow) -> Result<(), String> {
+fn hide_widget(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    // Closing/hiding the Main Widget must never quit the app or touch other
+    // presentation modes (Taskbar Companion keeps running untouched).
+    if window.label() == "main" {
+        return set_main_widget_enabled(app, false);
+    }
     window.hide().map_err(|error| error.to_string())
+}
+
+/// Single source of truth for presentation state, persisted independently of
+/// any particular window so Rust can decide visibility before the frontend
+/// even loads (no startup flash of a window that should stay hidden).
+fn presentation_snapshot(app: &AppHandle) -> PresentationSnapshot {
+    let state = read_widget_state(app);
+    PresentationSnapshot {
+        main_widget_enabled: state.main_widget_enabled.unwrap_or(false),
+        taskbar_companion_enabled: state.taskbar_companion_enabled.unwrap_or(true),
+        edge_dock_enabled: state.edge_dock_enabled.unwrap_or(false),
+    }
+}
+
+#[tauri::command]
+fn get_presentation_state(app: AppHandle) -> PresentationSnapshot {
+    presentation_snapshot(&app)
+}
+
+/// The Main Widget and Edge Dock are the same underlying "main" window shown
+/// in two different shapes (expanded vs. collapsed-to-edge). This is the only
+/// place that decides that window's visibility/shape; it never touches the
+/// Taskbar Companion window.
+fn apply_main_window_visibility(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let snapshot = presentation_snapshot(app);
+    if !snapshot.main_widget_enabled && !snapshot.edge_dock_enabled {
+        let _ = window.hide();
+        return;
+    }
+
+    let should_collapse = snapshot.edge_dock_enabled && !snapshot.main_widget_enabled;
+    let mut state = read_widget_state(app);
+    state.is_collapsed = Some(should_collapse);
+    let _ = write_widget_state(app, &state);
+
+    restore_or_place_window(app, &window);
+    let _ = window.set_resizable(!should_collapse);
+    let _ = window.show();
+    emit_edge_state(app);
+}
+
+fn sync_presentation_menu(app: &AppHandle) {
+    let snapshot = presentation_snapshot(app);
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(guard) = state.open_widget_item.lock() {
+            if let Some(item) = guard.as_ref() {
+                let label = if snapshot.main_widget_enabled { "Hide Full Widget" } else { "Open Full Widget" };
+                let _ = item.set_text(label);
+            }
+        }
+        if let Ok(guard) = state.taskbar_check_item.lock() {
+            if let Some(item) = guard.as_ref() {
+                let _ = item.set_checked(snapshot.taskbar_companion_enabled);
+            }
+        }
+        if let Ok(guard) = state.edge_dock_check_item.lock() {
+            if let Some(item) = guard.as_ref() {
+                let _ = item.set_checked(snapshot.edge_dock_enabled);
+            }
+        }
+    }
+}
+
+/// Shows/hides the Main Widget right now and remembers that choice for the
+/// next launch. Never touches Taskbar Companion or Edge Dock state.
+#[tauri::command]
+fn set_main_widget_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut state = read_widget_state(&app);
+    state.main_widget_enabled = Some(enabled);
+    write_widget_state(&app, &state).map_err(|error| error.to_string())?;
+    apply_main_window_visibility(&app);
+    if enabled {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_focus();
+        }
+    }
+    sync_presentation_menu(&app);
+    let _ = app.emit("presentation-state-changed", presentation_snapshot(&app));
+    Ok(())
+}
+
+/// Persists whether the Main Widget should open on the next launch, without
+/// touching its visibility in the current session (used by the "Main Widget
+/// on startup" settings toggle, which lives inside the widget itself).
+#[tauri::command]
+fn set_main_widget_startup_preference(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut state = read_widget_state(&app);
+    state.main_widget_enabled = Some(enabled);
+    write_widget_state(&app, &state).map_err(|error| error.to_string())?;
+    let _ = app.emit("presentation-state-changed", presentation_snapshot(&app));
+    Ok(())
+}
+
+/// Shows/hides Taskbar Companion right now and persists it for next launch.
+/// Never touches Main Widget or Edge Dock visibility.
+#[tauri::command]
+fn set_taskbar_companion_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut state = read_widget_state(&app);
+    state.taskbar_companion_enabled = Some(enabled);
+    write_widget_state(&app, &state).map_err(|error| error.to_string())?;
+    set_taskbar_companion_visible(app.clone(), enabled)?;
+    sync_presentation_menu(&app);
+    let _ = app.emit("presentation-state-changed", presentation_snapshot(&app));
+    Ok(())
+}
+
+/// Shows/hides the Main Widget in its collapsed-to-edge shape and persists it
+/// for next launch. Never touches Taskbar Companion visibility.
+#[tauri::command]
+fn set_edge_dock_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut state = read_widget_state(&app);
+    state.edge_dock_enabled = Some(enabled);
+    write_widget_state(&app, &state).map_err(|error| error.to_string())?;
+    apply_main_window_visibility(&app);
+    sync_presentation_menu(&app);
+    let _ = app.emit("presentation-state-changed", presentation_snapshot(&app));
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_main_widget(app: AppHandle) -> Result<(), String> {
+    let visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    set_main_widget_enabled(app, !visible)
 }
 
 #[tauri::command]
@@ -113,6 +285,10 @@ fn set_taskbar_companion_visible(app: AppHandle, enabled: bool) -> Result<(), St
     };
     if enabled {
         position_taskbar_companion(app.clone())?;
+        // The companion must never take keyboard focus away from whatever the
+        // user is typing in; it is a read-only readout that happens to accept
+        // clicks.
+        apply_no_activate(&window, true);
         window.show().map_err(|error| error.to_string())?;
         window
             .set_always_on_top(true)
@@ -122,37 +298,433 @@ fn set_taskbar_companion_visible(app: AppHandle, enabled: bool) -> Result<(), St
             .map_err(|error| error.to_string())?;
     } else {
         window.hide().map_err(|error| error.to_string())?;
+        let _ = hide_companion_popup(app.clone());
     }
     Ok(())
 }
 
-#[tauri::command]
-fn position_taskbar_companion(app: AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window("taskbar-companion") else {
-        return Ok(());
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompanionPlacement {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    taskbar_visible: bool,
+}
+
+/// Where the companion goes *inside* a real taskbar rect: hugging the left end
+/// (Windows 11's Widgets/News strip), vertically centred, and never taller
+/// than the taskbar itself.
+fn companion_placement(info: &taskbar::TaskbarInfo) -> CompanionPlacement {
+    let scale = if info.scale > 0.1 { info.scale } else { 1.0 };
+    let margin = (COMPANION_TASKBAR_MARGIN * scale).round() as i32;
+    let inset = (COMPANION_LEFT_INSET * scale).round() as i32;
+    let min_thickness = (24.0 * scale).round() as i32;
+
+    let (x, y, width, height) = match info.edge {
+        taskbar::TaskbarEdge::Bottom | taskbar::TaskbarEdge::Top => {
+            let height = (info.height - margin * 2).max(min_thickness).min(info.height);
+            let width = ((TASKBAR_COMPANION_SIZE.0 * scale).round() as i32).min(info.width.max(1));
+            let x = info.x + inset;
+            let y = info.y + (info.height - height) / 2;
+            (x, y, width, height)
+        }
+        taskbar::TaskbarEdge::Left | taskbar::TaskbarEdge::Right => {
+            let width = (info.width - margin * 2).max(min_thickness).min(info.width);
+            let height = (TASKBAR_COMPANION_SIZE.1 * scale).round() as i32;
+            let x = info.x + (info.width - width) / 2;
+            let y = info.y + inset;
+            (x, y, width, height)
+        }
     };
+
+    CompanionPlacement {
+        x,
+        y,
+        width: width.max(1) as u32,
+        height: height.max(1) as u32,
+        taskbar_visible: info.visible,
+    }
+}
+
+fn preferred_taskbar(app: &AppHandle) -> Option<taskbar::TaskbarInfo> {
+    let monitor_id = read_widget_state(app).taskbar_monitor_id;
+    let state = app.try_state::<AppState>();
+    let last_used = state
+        .as_ref()
+        .and_then(|state| state.companion_monitor.lock().ok().map(|value| value.clone()))
+        .flatten();
+    let found = taskbar::taskbar_for_monitor(monitor_id.as_deref(), last_used.as_deref());
+    if let (Some(info), Some(state)) = (found.as_ref(), state) {
+        if let Ok(mut guard) = state.companion_monitor.lock() {
+            *guard = Some(info.monitor_id.clone());
+        }
+    }
+    found
+}
+
+/// Fallback for the (non-Windows / no taskbar found) case: bottom-left of the
+/// work area, the closest thing to "on the taskbar" without the shell APIs.
+fn fallback_placement(app: &AppHandle) -> Result<CompanionPlacement, String> {
     let monitor = app
-        .get_webview_window("main")
-        .and_then(|main| main.current_monitor().ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten())
-        .or_else(|| app.available_monitors().ok().and_then(|monitors| monitors.into_iter().next()))
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| {
+            app.available_monitors()
+                .ok()
+                .and_then(|monitors| monitors.into_iter().next())
+        })
         .ok_or_else(|| "No monitor is available for the taskbar companion.".to_string())?;
     let scale = monitor.scale_factor();
     let width = (TASKBAR_COMPANION_SIZE.0 * scale).round() as u32;
     let height = (TASKBAR_COMPANION_SIZE.1 * scale).round() as u32;
-    let margin = (8.0 * scale).round() as i32;
+    let margin = (COMPANION_LEFT_INSET * scale).round() as i32;
     let area = monitor.work_area();
-    let x = area.position.x + area.size.width as i32 - width as i32 - margin;
-    let y = area.position.y + area.size.height as i32 - height as i32 - margin;
+    Ok(CompanionPlacement {
+        x: area.position.x + margin,
+        y: area.position.y + area.size.height as i32 - height as i32 - margin,
+        width,
+        height,
+        taskbar_visible: true,
+    })
+}
 
-    window
-        .set_size(PhysicalSize::new(width, height))
-        .map_err(|error| error.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(x.max(area.position.x), y.max(area.position.y)))
-        .map_err(|error| error.to_string())?;
+#[tauri::command]
+fn position_taskbar_companion(app: AppHandle) -> Result<(), String> {
+    let placement = match preferred_taskbar(&app) {
+        Some(info) => companion_placement(&info),
+        None => fallback_placement(&app)?,
+    };
+    apply_companion_placement(&app, placement, true)
+}
+
+fn apply_companion_placement(
+    app: &AppHandle,
+    placement: CompanionPlacement,
+    force: bool,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("taskbar-companion") else {
+        return Ok(());
+    };
+    let unchanged = app
+        .try_state::<AppState>()
+        .and_then(|state| state.companion_placement.lock().ok().map(|value| *value))
+        .flatten()
+        .map(|previous| previous == placement)
+        .unwrap_or(false);
+    if unchanged && !force {
+        return Ok(());
+    }
+
+    if placement.taskbar_visible {
+        window
+            .set_size(PhysicalSize::new(placement.width, placement.height))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_position(PhysicalPosition::new(placement.x, placement.y))
+            .map_err(|error| error.to_string())?;
+        if !window.is_visible().unwrap_or(false) {
+            let _ = window.show();
+        }
+        // Keep the companion above the taskbar itself, without activating it.
+        raise_no_activate(&window);
+    } else {
+        // Auto-hiding taskbar slid off-screen: the companion goes with it.
+        let _ = window.hide();
+        let _ = hide_companion_popup(app.clone());
+    }
+
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.companion_placement.lock() {
+            *guard = Some(placement);
+        }
+    }
+    debug_log(&format!(
+        "[Companion] placed x={} y={} w={} h={} taskbarVisible={}",
+        placement.x, placement.y, placement.width, placement.height, placement.taskbar_visible
+    ));
     Ok(())
 }
+
+/// Polls the shell for taskbar geometry so the companion survives DPI changes,
+/// resolution changes, taskbar resizes, and auto-hide, without any hooking.
+fn watch_taskbar(app: AppHandle) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(COMPANION_WATCH_INTERVAL_MS));
+        if !presentation_snapshot(&app).taskbar_companion_enabled {
+            continue;
+        }
+        let placement = match preferred_taskbar(&app) {
+            Some(info) => companion_placement(&info),
+            None => match fallback_placement(&app) {
+                Ok(value) => value,
+                Err(_) => continue,
+            },
+        };
+        let _ = apply_companion_placement(&app, placement, false);
+    });
+}
+
+#[tauri::command]
+fn get_taskbar_info(app: AppHandle) -> Option<taskbar::TaskbarInfo> {
+    preferred_taskbar(&app)
+}
+
+#[tauri::command]
+fn list_taskbars() -> Vec<taskbar::TaskbarInfo> {
+    taskbar::all_taskbars()
+}
+
+/// Persists which monitor's taskbar the companion docks to (empty/None means
+/// "follow the primary monitor").
+#[tauri::command]
+fn set_taskbar_monitor(app: AppHandle, monitor_id: Option<String>) -> Result<(), String> {
+    let mut state = read_widget_state(&app);
+    state.taskbar_monitor_id = monitor_id.filter(|id| !id.is_empty());
+    write_widget_state(&app, &state).map_err(|error| error.to_string())?;
+    position_taskbar_companion(app)
+}
+
+// -----------------------------------------------------------------------
+// Hover popup: its own borderless window, because the companion window is only
+// as tall as the taskbar and would clip anything drawn above it.
+// -----------------------------------------------------------------------
+
+fn companion_anchor(app: &AppHandle) -> Option<(i32, i32, i32, i32)> {
+    let window = app.get_webview_window("taskbar-companion")?;
+    let position = window.outer_position().ok()?;
+    let size = window.outer_size().ok()?;
+    Some((position.x, position.y, size.width as i32, size.height as i32))
+}
+
+#[tauri::command]
+fn show_companion_popup(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let Some(popup) = app.get_webview_window("companion-popup") else {
+        return Err("Companion popup window is missing.".to_string());
+    };
+    let info = preferred_taskbar(&app);
+    let scale = info
+        .as_ref()
+        .map(|value| value.scale)
+        .filter(|value| *value > 0.1)
+        .or_else(|| popup.scale_factor().ok())
+        .unwrap_or(1.0);
+
+    let popup_width = (width.max(140.0) * scale).round() as i32;
+    let popup_height = (height.max(90.0) * scale).round() as i32;
+    let gap = (COMPANION_POPUP_GAP * scale).round() as i32;
+    let (anchor_x, anchor_y, _anchor_width, anchor_height) =
+        companion_anchor(&app).ok_or_else(|| "Companion window is missing.".to_string())?;
+
+    let (mut x, mut y) = match info.as_ref().map(|value| value.edge) {
+        Some(taskbar::TaskbarEdge::Top) => (
+            anchor_x,
+            info.as_ref()
+                .map(|value| value.y + value.height)
+                .unwrap_or(anchor_y + anchor_height)
+                + gap,
+        ),
+        Some(taskbar::TaskbarEdge::Left) => (
+            info.as_ref().map(|value| value.x + value.width).unwrap_or(anchor_x) + gap,
+            anchor_y,
+        ),
+        Some(taskbar::TaskbarEdge::Right) => (
+            info.as_ref().map(|value| value.x).unwrap_or(anchor_x) - popup_width - gap,
+            anchor_y,
+        ),
+        // Bottom taskbar (and the no-taskbar fallback): open upwards.
+        _ => (
+            anchor_x,
+            info.as_ref().map(|value| value.y).unwrap_or(anchor_y) - popup_height - gap,
+        ),
+    };
+
+    if let Some(bounds) = info.as_ref() {
+        x = x.clamp(
+            bounds.monitor_x,
+            (bounds.monitor_x + bounds.monitor_width - popup_width).max(bounds.monitor_x),
+        );
+        y = y.clamp(
+            bounds.monitor_y,
+            (bounds.monitor_y + bounds.monitor_height - popup_height).max(bounds.monitor_y),
+        );
+    }
+
+    popup
+        .set_size(PhysicalSize::new(popup_width as u32, popup_height as u32))
+        .map_err(|error| error.to_string())?;
+    popup
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|error| error.to_string())?;
+    // Hovering must not pull focus out of the editor/terminal underneath.
+    apply_no_activate(&popup, true);
+    popup.show().map_err(|error| error.to_string())?;
+    let _ = popup.set_always_on_top(true);
+    let _ = popup.set_skip_taskbar(true);
+    raise_no_activate(&popup);
+    debug_log(&format!("[Popup] shown {}", describe_bounds(&popup)));
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PointerState {
+    over_companion: bool,
+    over_popup: bool,
+}
+
+fn describe_bounds(window: &WebviewWindow) -> String {
+    let visible = window.is_visible().unwrap_or(false);
+    match (window.outer_position(), window.outer_size()) {
+        (Ok(position), Ok(size)) => format!(
+            "{},{} {}x{} visible={visible}",
+            position.x, position.y, size.width, size.height
+        ),
+        _ => format!("unknown visible={visible}"),
+    }
+}
+
+fn window_contains(window: &WebviewWindow, x: f64, y: f64) -> bool {
+    if !window.is_visible().unwrap_or(false) {
+        return false;
+    }
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return false;
+    };
+    let right = position.x as f64 + size.width as f64;
+    let bottom = position.y as f64 + size.height as f64;
+    x >= position.x as f64 && x < right && y >= position.y as f64 && y < bottom
+}
+
+/// Hover is decided from the real cursor position rather than from webview
+/// mouse events. A borderless, never-activated window reports mouse-out
+/// spuriously, which is what made the hover popup close the moment the pointer
+/// crossed into it; polling both window rects is immune to that and also
+/// covers the gap between the two windows.
+fn watch_pointer(app: AppHandle) {
+    thread::spawn(move || {
+        let mut last: Option<PointerState> = None;
+        let mut mouse_was_down = false;
+        loop {
+            thread::sleep(Duration::from_millis(POINTER_WATCH_INTERVAL_MS));
+            let Some(companion) = app.get_webview_window("taskbar-companion") else {
+                continue;
+            };
+            let Some((x, y)) = taskbar::cursor_position().or_else(|| {
+                app.cursor_position()
+                    .ok()
+                    .map(|position| (position.x, position.y))
+            }) else {
+                continue;
+            };
+            let popup = app.get_webview_window("companion-popup");
+            let state = PointerState {
+                over_companion: window_contains(&companion, x, y),
+                over_popup: popup
+                    .as_ref()
+                    .map(|popup| window_contains(popup, x, y))
+                    .unwrap_or(false),
+            };
+            // Windows refuses to hand foreground to a window whose app is not
+            // already in front, so a pinned popup has no keyboard focus and
+            // cannot see Escape itself. Watching the two key states here is
+            // what keeps "Escape closes it" and "click elsewhere closes it"
+            // working without stealing focus from the user's editor.
+            let pinned = app
+                .try_state::<AppState>()
+                .and_then(|state| state.popup_pinned.lock().ok().map(|value| *value))
+                .unwrap_or(false);
+            if pinned {
+                let outside = !state.over_companion && !state.over_popup;
+                let clicked_away = taskbar::primary_mouse_down() && outside && !mouse_was_down;
+                if taskbar::escape_down() || clicked_away {
+                    debug_log("[Popup] dismissed while pinned");
+                    let _ = app.emit("companion-popup-dismiss", ());
+                }
+            }
+            mouse_was_down = taskbar::primary_mouse_down();
+
+            if last == Some(state) {
+                continue;
+            }
+            last = Some(state);
+            debug_log(&format!(
+                "[Pointer] cursor=({x:.0},{y:.0}) companion={} popup={}",
+                state.over_companion, state.over_popup
+            ));
+            let _ = app.emit("companion-pointer", state);
+        }
+    });
+}
+
+/// Escape inside the popup, or the popup losing focus while pinned.
+#[tauri::command]
+fn dismiss_companion_popup(app: AppHandle) -> Result<(), String> {
+    debug_log("[Popup] dismiss requested");
+    app.emit("companion-popup-dismiss", ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn hide_companion_popup(app: AppHandle) -> Result<(), String> {
+    let Some(popup) = app.get_webview_window("companion-popup") else {
+        return Ok(());
+    };
+    popup.hide().map_err(|error| error.to_string())?;
+    debug_log("[Popup] hidden");
+    Ok(())
+}
+
+/// Pinning (an explicit click) is allowed to activate the popup so it can take
+/// Escape and detect click-outside via focus loss. Plain hovering never does.
+#[tauri::command]
+fn set_companion_popup_pinned(app: AppHandle, pinned: bool) -> Result<(), String> {
+    let Some(popup) = app.get_webview_window("companion-popup") else {
+        return Ok(());
+    };
+    apply_no_activate(&popup, !pinned);
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.popup_pinned.lock() {
+            *guard = pinned;
+        }
+    }
+    if pinned {
+        let _ = popup.set_focus();
+    }
+    debug_log(&format!("[Popup] pinned={pinned}"));
+    Ok(())
+}
+
+fn debug_log(message: &str) {
+    #[cfg(debug_assertions)]
+    println!("{message}");
+    #[cfg(not(debug_assertions))]
+    let _ = message;
+}
+
+#[cfg(windows)]
+fn apply_no_activate(window: &WebviewWindow, enabled: bool) {
+    if let Ok(hwnd) = window.hwnd() {
+        taskbar::set_no_activate(hwnd, enabled);
+        if enabled {
+            taskbar::deliver_clicks_without_activation(hwnd);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_no_activate(_window: &WebviewWindow, _enabled: bool) {}
+
+#[cfg(windows)]
+fn raise_no_activate(window: &WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        taskbar::raise_topmost_no_activate(hwnd);
+    }
+}
+
+#[cfg(not(windows))]
+fn raise_no_activate(_window: &WebviewWindow) {}
 
 #[tauri::command]
 fn get_edge_dock_state(app: AppHandle) -> EdgeDockSnapshot {
@@ -667,33 +1239,6 @@ fn restore_or_place_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindo
     }
 }
 
-fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-}
-
-fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-}
-
-fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        match window.is_visible() {
-            Ok(true) => {
-                let _ = window.hide();
-            }
-            _ => {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }
-    }
-}
-
 fn resize_main_window<R: Runtime>(app: &AppHandle<R>, width: f64, height: f64) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_size(LogicalSize::new(width, height));
@@ -724,10 +1269,27 @@ fn toggle_always_on_top<R: Runtime>(app: &AppHandle<R>) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let snapshot = presentation_snapshot(app);
     let title = MenuItem::with_id(app, "title", "AI Usage Monitor", false, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", "Show Widget", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "Hide Widget", true, None::<&str>)?;
-    let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
+    let open_widget_label = if snapshot.main_widget_enabled { "Hide Full Widget" } else { "Open Full Widget" };
+    let open_widget = MenuItem::with_id(app, "open_full_widget", open_widget_label, true, None::<&str>)?;
+    let taskbar_companion = CheckMenuItem::with_id(
+        app,
+        "taskbar_companion",
+        "Taskbar Companion",
+        true,
+        snapshot.taskbar_companion_enabled,
+        None::<&str>,
+    )?;
+    let edge_dock = CheckMenuItem::with_id(
+        app,
+        "edge_dock",
+        "Edge Dock",
+        true,
+        snapshot.edge_dock_enabled,
+        None::<&str>,
+    )?;
+    let refresh = MenuItem::with_id(app, "refresh", "Refresh Claude", true, None::<&str>)?;
     let always_on_top =
         MenuItem::with_id(app, "always_on_top", "Always on Top", true, None::<&str>)?;
     let dock_left = MenuItem::with_id(app, "dock_left", "Left", true, None::<&str>)?;
@@ -748,14 +1310,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let title_separator = PredefinedMenuItem::separator(app)?;
+    let presentation_separator = PredefinedMenuItem::separator(app)?;
     let action_separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[
             &title,
             &title_separator,
-            &show,
-            &hide,
+            &open_widget,
+            &taskbar_companion,
+            &edge_dock,
+            &presentation_separator,
             &refresh,
             &dock_menu,
             &collapse,
@@ -768,19 +1333,42 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
 
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.open_widget_item.lock() {
+            *guard = Some(open_widget.clone());
+        }
+        if let Ok(mut guard) = state.taskbar_check_item.lock() {
+            *guard = Some(taskbar_companion.clone());
+        }
+        if let Ok(mut guard) = state.edge_dock_check_item.lock() {
+            *guard = Some(edge_dock.clone());
+        }
+    }
+
     TrayIconBuilder::new()
         .tooltip("AI Usage Monitor")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
-            "hide" => hide_main_window(app),
+            "open_full_widget" => {
+                let _ = toggle_main_widget(app.clone());
+            }
+            "taskbar_companion" => {
+                let enabled = !presentation_snapshot(app).taskbar_companion_enabled;
+                let _ = set_taskbar_companion_enabled(app.clone(), enabled);
+            }
+            "edge_dock" => {
+                let enabled = !presentation_snapshot(app).edge_dock_enabled;
+                let _ = set_edge_dock_enabled(app.clone(), enabled);
+            }
             "refresh" => {
-                show_main_window(app);
+                // Background refresh must not surface the Main Widget: the
+                // fetch loop already runs in the (possibly hidden) main
+                // window, so just ask it to refresh.
                 let _ = app.emit("tray-refresh", ());
             }
             "dock_left" => {
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some(state) = app.try_state::<AppState>() {
                         let _ = set_dock_side(app.clone(), window, state, DockSide::Left);
@@ -788,7 +1376,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "dock_right" => {
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some(state) = app.try_state::<AppState>() {
                         let _ = set_dock_side(app.clone(), window, state, DockSide::Right);
@@ -796,7 +1384,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "dock_undock" => {
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some(state) = app.try_state::<AppState>() {
                         let _ = undock_widget(app.clone(), window, state);
@@ -804,7 +1392,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "collapse_edge" => {
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some(state) = app.try_state::<AppState>() {
                         let _ = collapse_to_edge(app.clone(), window, state, None);
@@ -812,7 +1400,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "expand_edge" => {
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 if let Some(window) = app.get_webview_window("main") {
                     if let Some(state) = app.try_state::<AppState>() {
                         let _ = expand_from_edge(app.clone(), window, state);
@@ -821,26 +1409,26 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "size_small" => {
                 resize_main_window(app, SMALL_SIZE.0, SMALL_SIZE.1);
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 let _ = app.emit("tray-size", "small");
             }
             "size_medium" => {
                 resize_main_window(app, MEDIUM_SIZE.0, MEDIUM_SIZE.1);
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 let _ = app.emit("tray-size", "medium");
             }
             "size_large" => {
                 resize_main_window(app, LARGE_SIZE.0, LARGE_SIZE.1);
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 let _ = app.emit("tray-size", "large");
             }
             "always_on_top" => toggle_always_on_top(app),
             "settings" => {
-                show_main_window(app);
+                let _ = set_main_widget_enabled(app.clone(), true);
                 let _ = app.emit("tray-settings", ());
             }
             "quit" => app.exit(0),
-            _ => show_main_window(app),
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::DoubleClick {
@@ -848,7 +1436,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                toggle_main_window(tray.app_handle());
+                let _ = toggle_main_widget(tray.app_handle().clone());
             }
         })
         .build(app)?;
@@ -861,6 +1449,12 @@ pub fn run() {
         .manage(AppState {
             always_on_top: Mutex::new(true),
             is_animating: Mutex::new(false),
+            open_widget_item: Mutex::new(None),
+            taskbar_check_item: Mutex::new(None),
+            companion_placement: Mutex::new(None),
+            companion_monitor: Mutex::new(None),
+            popup_pinned: Mutex::new(false),
+            edge_dock_check_item: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -875,11 +1469,24 @@ pub fn run() {
             hide_widget,
             set_taskbar_companion_visible,
             position_taskbar_companion,
+            get_taskbar_info,
+            list_taskbars,
+            set_taskbar_monitor,
+            show_companion_popup,
+            hide_companion_popup,
+            dismiss_companion_popup,
+            set_companion_popup_pinned,
             get_edge_dock_state,
             collapse_to_edge,
             expand_from_edge,
             set_dock_side,
             undock_widget,
+            get_presentation_state,
+            set_main_widget_enabled,
+            set_main_widget_startup_preference,
+            set_taskbar_companion_enabled,
+            set_edge_dock_enabled,
+            toggle_main_widget,
             usage::read_claude_usage,
             usage::read_codex_usage
         ])
@@ -887,7 +1494,6 @@ pub fn run() {
             let persisted_state = read_widget_state(app.handle());
             build_tray(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
-                restore_or_place_window(app.handle(), &window);
                 let always_on_top = persisted_state.always_on_top.unwrap_or(true);
                 if let Some(state) = app.try_state::<AppState>() {
                     if let Ok(mut value) = state.always_on_top.lock() {
@@ -896,16 +1502,38 @@ pub fn run() {
                 }
                 let _ = window.set_always_on_top(always_on_top);
                 let _ = window.set_skip_taskbar(true);
-                let _ = window.show();
+                // Each presentation mode's visibility comes from its own
+                // persisted flag only. Main Widget/Edge Dock default to off,
+                // so this must not force-show the window here.
+                apply_main_window_visibility(app.handle());
             }
+            if let Some(popup) = app.get_webview_window("companion-popup") {
+                let _ = popup.set_skip_taskbar(true);
+                let _ = popup.set_always_on_top(true);
+                apply_no_activate(&popup, true);
+            }
+            let taskbar_enabled = persisted_state.taskbar_companion_enabled.unwrap_or(true);
+            let _ = set_taskbar_companion_visible(app.handle().clone(), taskbar_enabled);
+            watch_taskbar(app.handle().clone());
+            watch_pointer(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _ = window.hide();
+                // Closing a presentation window only hides it (and, for the
+                // Main Widget, remembers that for next launch) -- it never
+                // quits the app or affects any other presentation mode.
+                if window.label() == "main" {
+                    let _ = set_main_widget_enabled(window.app_handle().clone(), false);
+                } else {
+                    let _ = window.hide();
+                }
             }
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                if window.label() != "main" {
+                    return;
+                }
                 if let Some(webview_window) = window.app_handle().get_webview_window("main") {
                     let is_animating = window
                         .app_handle()

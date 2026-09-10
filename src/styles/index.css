@@ -25,10 +25,11 @@
 html,
 body,
 #root {
+  /* No min-width/min-height here: the Taskbar Companion window is only as tall
+     as the taskbar, and a global minimum would overflow its bounds. Each
+     window declares its own minimum size in tauri.conf.json. */
   width: 100%;
-  min-width: 200px;
   height: 100%;
-  min-height: 150px;
   margin: 0;
   overflow: hidden;
   background: transparent;
