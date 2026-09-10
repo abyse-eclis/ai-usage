@@ -8,6 +8,7 @@ export interface AppSettings {
   alwaysOnTop: boolean
   lockPosition: boolean
   snapToEdge: boolean
+  autoCollapseWhenDocked: boolean
   hideFromTaskbar: boolean
   sizeMode: WidgetSizeMode
   appearance: "system" | "dark" | "light"

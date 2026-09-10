@@ -13,6 +13,7 @@ const defaults: AppSettings = {
   alwaysOnTop: true,
   lockPosition: false,
   snapToEdge: true,
+  autoCollapseWhenDocked: false,
   hideFromTaskbar: true,
   sizeMode: "medium",
   appearance: "dark",
@@ -43,13 +44,18 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: "ai-usage-settings",
-      version: 2,
+      version: 3,
       // v1 shipped with demo mode forced on. Clear that stored preference once so
       // existing installs land on the real providers.
       migrate: (persisted, version) => {
         const state = persisted as { settings?: AppSettings } | undefined
-        if (version >= 2 || !state?.settings) return state
-        return { ...state, settings: { ...state.settings, demoMode: envDemo } }
+        if (!state?.settings) return state
+        const settings = {
+          ...state.settings,
+          autoCollapseWhenDocked: state.settings.autoCollapseWhenDocked ?? defaults.autoCollapseWhenDocked
+        }
+        if (version < 2) settings.demoMode = envDemo
+        return { ...state, settings }
       }
     }
   )

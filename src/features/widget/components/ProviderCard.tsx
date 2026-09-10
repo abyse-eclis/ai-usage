@@ -1,13 +1,9 @@
-import { ChevronRight, CircleAlert } from "lucide-react"
-import type { ProviderUsage } from "../../../shared/types/usage"
-import { formatResetCountdown } from "../../../shared/utils/time"
-import { ProgressBar } from "./ProgressBar"
-
-const accents: Record<ProviderUsage["provider"], string> = {
-  claude: "hsl(var(--accent-claude))",
-  codex: "hsl(var(--accent-codex))",
-  chatgpt: "hsl(var(--accent-chatgpt))"
-}
+import { CircleAlert } from "lucide-react"
+import type { ProviderUsage, UsageLimit } from "../../../shared/types/usage"
+import { formatClock } from "../../../shared/utils/time"
+import { getUsageSeverity } from "../../../shared/utils/thresholds"
+import { useSettingsStore } from "../../settings/store/settingsStore"
+import type { WidgetSizeMode } from "../types/widget"
 
 const names: Record<ProviderUsage["provider"], string> = {
   claude: "Claude",
@@ -17,50 +13,129 @@ const names: Record<ProviderUsage["provider"], string> = {
 
 interface ProviderCardProps {
   usage: ProviderUsage
-  compact?: boolean
-  detailed?: boolean
+  mode: WidgetSizeMode
 }
 
-export function ProviderCard({ usage, compact = false, detailed = false }: ProviderCardProps) {
-  const accent = accents[usage.provider]
-  const visibleLimits = compact ? usage.limits.slice(0, 1) : usage.limits
+export function ProviderCard({ usage, mode }: ProviderCardProps) {
+  const thresholds = useSettingsStore((state) => state.settings.thresholds)
+  const visibleLimits = visibleLimitCount(mode, usage.limits.length)
 
   return (
-    <section className="rounded-[8px] border border-white/10 bg-[hsl(var(--color-card)/0.38)] px-3 py-2.5 shadow-[0_12px_32px_rgb(0_0_0/0.18)]">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="truncate text-sm font-semibold text-[hsl(var(--color-text))]">{names[usage.provider]}</h2>
-        <ChevronRight className="size-4 shrink-0 text-[hsl(var(--color-muted))]" aria-hidden />
-      </div>
-
+    <section className="border-b border-white/10 py-[7px] last:border-b-0">
+      <h2 className="mb-1 truncate text-[11.5px] font-semibold leading-tight text-[hsl(var(--color-text))]">{names[usage.provider]}</h2>
       {usage.status === "connected" ? (
-        <div className="space-y-2">
-          {visibleLimits.map((limit) => (
-            <div key={limit.id} className="grid grid-cols-[minmax(60px,0.9fr)_minmax(76px,1.5fr)_auto] items-center gap-2">
-              <div className="min-w-0">
-                <div className="truncate text-xs text-[hsl(var(--color-text))]">{limit.label}</div>
-                {!compact && limit.resetAt ? (
-                  <div className="mt-1 truncate text-xs text-[hsl(var(--color-muted))]">
-                    {formatResetCountdown(limit.resetAt)}
-                  </div>
-                ) : null}
-              </div>
-              <ProgressBar percent={limit.usedPercent} accent={accent} label={`${names[usage.provider]} ${limit.label}`} />
-              <div className="min-w-10 text-right text-xs font-medium text-[hsl(var(--color-text))]">
-                {limit.used !== undefined && limit.total !== undefined ? `${limit.used} / ${limit.total}` : `${limit.usedPercent ?? 0}%`}
-              </div>
-            </div>
+        <div className="space-y-1">
+          {usage.limits.slice(0, visibleLimits).map((limit, index) => (
+            <LimitRow key={limit.id} limit={limit} primary={index === 0} mode={mode} thresholds={thresholds} />
           ))}
-          {detailed && usage.error ? <p className="text-xs text-[hsl(var(--color-muted))]">{usage.error.message}</p> : null}
+          {mode === "large" && usage.error ? <p className="truncate text-[10px] text-[hsl(var(--color-muted))]">{usage.error.message}</p> : null}
         </div>
       ) : (
-        <div className="flex items-start gap-2 text-xs text-[hsl(var(--color-muted))]">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
+        <div className="flex items-start gap-1.5 text-[10px] leading-snug text-[hsl(var(--color-muted))]">
+          <CircleAlert className="mt-0.5 size-3 shrink-0" />
           <div>
             <div>{usage.error?.message ?? "Usage unavailable"}</div>
-            {usage.lastSuccessfulAt ? <div className="mt-1 text-xs">Last successful update {usage.lastSuccessfulAt}</div> : null}
+            {usage.lastSuccessfulAt ? <div className="mt-0.5">Checked {formatClock(usage.lastSuccessfulAt)}</div> : null}
           </div>
         </div>
       )}
     </section>
   )
+}
+
+function LimitRow({
+  limit,
+  primary,
+  mode,
+  thresholds
+}: {
+  limit: UsageLimit
+  primary: boolean
+  mode: WidgetSizeMode
+  thresholds: { warning: number; high: number; critical: number }
+}) {
+  const usageText = formatUsage(limit, mode)
+  const resetText = formatReset(limit, mode)
+  const severity = getUsageSeverity(limit.usedPercent ?? 0, thresholds)
+  const usageColor =
+    severity === "critical"
+      ? "text-[hsl(var(--state-critical))]"
+      : severity === "high" || severity === "warning"
+        ? "text-[hsl(var(--state-warning))]"
+        : "text-[hsl(var(--color-text))]"
+
+  return (
+    <div className={primary ? "space-y-0.5" : "space-y-0.5 pt-1"}>
+      {mode !== "small" || !primary ? (
+        <div className={`truncate text-[9.5px] leading-tight ${primary ? "text-[hsl(var(--color-muted))]" : "text-[hsl(var(--color-muted-weak))]"}`}>
+          {limit.label}
+        </div>
+      ) : null}
+      <div className={`truncate text-[11.5px] font-semibold leading-tight ${usageColor}`}>{usageText}</div>
+      {resetText ? <div className="truncate text-[9.5px] leading-tight text-[hsl(var(--color-muted))]">{resetText}</div> : null}
+    </div>
+  )
+}
+
+function visibleLimitCount(mode: WidgetSizeMode, total: number) {
+  if (mode === "small") return Math.min(total, 1)
+  if (mode === "medium") return Math.min(total, 2)
+  return total
+}
+
+function formatUsage(limit: UsageLimit, mode: WidgetSizeMode) {
+  if (limit.used !== undefined && limit.total !== undefined) {
+    const left = Math.max(0, limit.total - limit.used)
+    const count = mode === "small" ? `${formatNumber(limit.used)}/${formatNumber(limit.total)}` : `${formatNumber(limit.used)} / ${formatNumber(limit.total)} used`
+    return `${count} \u00b7 ${formatNumber(left)} left`
+  }
+
+  if (limit.usedPercent !== undefined) {
+    const left = limit.remainingPercent !== undefined ? `${limit.remainingPercent}% left` : undefined
+    return left ? `${limit.usedPercent}% used \u00b7 ${left}` : `${limit.usedPercent}% used`
+  }
+
+  if (limit.used !== undefined) return `${formatNumber(limit.used)} used`
+  if (limit.remainingPercent !== undefined) return `${limit.remainingPercent}% left`
+  return "Usage unavailable"
+}
+
+function formatReset(limit: UsageLimit, mode: WidgetSizeMode) {
+  if (!limit.resetAt) return limit.resetLabel
+  const countdown = formatCountdown(limit.resetAt)
+  if (!countdown) return limit.resetLabel
+  if (mode === "small") return `Reset ${countdown}`
+  const at = formatResetAt(limit.resetAt)
+  return at ? `Reset ${countdown} \u00b7 ${at}` : `Reset ${countdown}`
+}
+
+function formatCountdown(resetAt: string, now = new Date()) {
+  const diffMs = new Date(resetAt).getTime() - now.getTime()
+  if (Number.isNaN(diffMs)) return undefined
+  if (diffMs <= 0) return "now"
+  const totalMinutes = Math.ceil(diffMs / 60000)
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function formatResetAt(resetAt: string) {
+  const date = new Date(resetAt)
+  if (Number.isNaN(date.getTime())) return undefined
+  const now = new Date()
+  const sameDay = date.toDateString() === now.toDateString()
+  if (sameDay) return formatClock(resetAt)
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date)
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)
 }

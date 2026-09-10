@@ -13,9 +13,9 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
   if (!open) return null
 
   return (
-    <aside className="no-scrollbar max-h-full overflow-y-auto rounded-[8px] border border-white/10 bg-[hsl(var(--color-panel-strong)/0.86)] p-4">
-      <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
-        <Settings className="size-4" />
+    <aside className="no-scrollbar h-full overflow-y-auto rounded-[8px] border border-white/10 bg-[hsl(var(--color-panel-strong)/0.96)] p-2.5 shadow-[0_12px_28px_rgb(0_0_0/0.3)]">
+      <div className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold">
+        <Settings className="size-3.5" />
         Settings
       </div>
 
@@ -47,6 +47,11 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
         <Toggle label="Always on top" checked={settings.alwaysOnTop} onChange={(alwaysOnTop) => updateSettings({ alwaysOnTop })} />
         <Toggle label="Lock position" checked={settings.lockPosition} onChange={(lockPosition) => updateSettings({ lockPosition })} />
         <Toggle label="Snap to edge" checked={settings.snapToEdge} onChange={(snapToEdge) => updateSettings({ snapToEdge })} />
+        <Toggle
+          label="Auto collapse when docked"
+          checked={settings.autoCollapseWhenDocked}
+          onChange={(autoCollapseWhenDocked) => updateSettings({ autoCollapseWhenDocked })}
+        />
         <Toggle label="Hide from taskbar" checked={settings.hideFromTaskbar} onChange={(hideFromTaskbar) => updateSettings({ hideFromTaskbar })} />
       </Section>
 
@@ -83,8 +88,8 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <section className="mb-5 space-y-2 last:mb-0">
-      <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-normal text-[hsl(var(--color-muted))]">
+    <section className="mb-3 space-y-1.5 last:mb-0">
+      <h3 className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-normal text-[hsl(var(--color-muted))]">
         {icon}
         {title}
       </h3>
@@ -95,7 +100,7 @@ function Section({ icon, title, children }: { icon: ReactNode; title: string; ch
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
   return (
-    <label className="flex items-center justify-between gap-4 text-sm text-[hsl(var(--color-text))]">
+    <label className="flex items-center justify-between gap-3 text-[11px] text-[hsl(var(--color-text))]">
       <span>{label}</span>
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
     </label>
@@ -104,9 +109,9 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 
 function ProviderRow({ name, status }: { name: string; status: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-sm">
+    <div className="flex items-center justify-between gap-3 text-[11px]">
       <span>{name}</span>
-      <span className="text-xs text-[hsl(var(--color-muted))]">{status}</span>
+      <span className="truncate text-[10px] text-[hsl(var(--color-muted))]">{status}</span>
     </div>
   )
 }

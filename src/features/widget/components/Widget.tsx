@@ -1,10 +1,11 @@
-import { Info, RefreshCw, Settings, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, RefreshCw, Settings, X } from "lucide-react"
 import { listen } from "@tauri-apps/api/event"
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import type { ProviderUsage } from "../../../shared/types/usage"
 import { formatClock } from "../../../shared/utils/time"
-import { primaryLimit } from "../../../shared/utils/usage"
+import { useEdgeDockStore } from "../../edge-dock/store/edgeDockStore"
+import type { DockSide, EdgeDockState } from "../../edge-dock/types/edgeDock"
 import { notifyThresholds } from "../../notifications/services/notifications"
 import { SettingsPanel } from "../../settings/components/SettingsPanel"
 import { useSettingsStore } from "../../settings/store/settingsStore"
@@ -13,7 +14,6 @@ import { useContainerSize } from "../hooks/useContainerSize"
 import { useUsageStore } from "../store/usageStore"
 import { inferWidgetMode } from "../utils/presets"
 import { ProviderCard } from "./ProviderCard"
-import { ProgressBar } from "./ProgressBar"
 
 const providerOrder = ["claude", "codex", "chatgpt"] as const
 
@@ -24,13 +24,20 @@ export function Widget() {
   const [tick, setTick] = useState(0)
   const { settings, updateSettings } = useSettingsStore()
   const { usage, isRefreshing, refreshFailed, refreshUsage } = useUsageStore()
+  const isCollapsed = useEdgeDockStore((state) => state.isCollapsed)
+  const dockSide = useEdgeDockStore((state) => state.dockSide)
+  const isDockAnimating = useEdgeDockStore((state) => state.isAnimating)
+  const hydrateEdgeDock = useEdgeDockStore((state) => state.hydrate)
+  const collapseEdgeDock = useEdgeDockStore((state) => state.collapse)
+  const expandEdgeDock = useEdgeDockStore((state) => state.expand)
+  const applyEdgeDockState = useEdgeDockStore((state) => state.applyNativeState)
 
   const usages = useMemo(
     () => providerOrder.map((id) => usage[id]).filter((item): item is ProviderUsage => item !== undefined),
     [usage]
   )
   const latestUpdatedAt = usages
-    .map((item) => item.updatedAt)
+    .map((item) => item.lastSuccessfulAt ?? item.updatedAt)
     .sort()
     .at(-1)
 
@@ -60,6 +67,9 @@ export function Widget() {
     const unlisteners = [
       listen("tray-refresh", () => refreshUsage(settings.demoMode)),
       listen("tray-settings", () => setSettingsOpen(true)),
+      listen<EdgeDockState>("edge-dock-state", (event) => {
+        applyEdgeDockState(event.payload)
+      }),
       listen<"small" | "medium" | "large">("tray-size", (event) => {
         updateSettings({ sizeMode: event.payload })
       }),
@@ -73,7 +83,11 @@ export function Widget() {
         unlisten.then((dispose) => dispose()).catch(() => undefined)
       })
     }
-  }, [refreshUsage, settings.demoMode, updateSettings])
+  }, [applyEdgeDockState, refreshUsage, settings.demoMode, updateSettings])
+
+  useEffect(() => {
+    hydrateEdgeDock().catch(() => undefined)
+  }, [hydrateEdgeDock])
 
   useEffect(() => {
     if (settings.notificationsEnabled) {
@@ -93,109 +107,97 @@ export function Widget() {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [updateSettings])
 
+  if (isCollapsed) {
+    const side = dockSide ?? "right"
+    const Icon = side === "left" ? ChevronRight : ChevronLeft
+    return (
+      <main
+        ref={ref}
+        className={`grid h-full w-full place-items-center border border-[hsl(var(--color-border)/0.62)] bg-[hsl(var(--color-panel)/var(--panel-opacity))] text-[hsl(var(--color-text))] shadow-[0_8px_22px_rgb(0_0_0/0.28)] ${
+          side === "left" ? "rounded-r-[10px] border-l-0" : "rounded-l-[10px] border-r-0"
+        }`}
+        style={{ "--panel-opacity": settings.opacity } as CSSProperties}
+      >
+        <button
+          type="button"
+          className="grid size-full place-items-center outline-none transition hover:bg-white/10 active:bg-white/14 focus-visible:ring-2 focus-visible:ring-sky-300"
+          aria-label="Expand AI Usage Widget"
+          title="Expand"
+          disabled={isDockAnimating}
+          onClick={() => expandEdgeDock()}
+        >
+          <Icon className="size-4" />
+        </button>
+      </main>
+    )
+  }
+
   return (
     <main
       ref={ref}
-      className="h-full w-full overflow-hidden rounded-[22px] border border-[hsl(var(--color-border)/0.62)] bg-[hsl(var(--color-panel)/var(--panel-opacity))] text-[hsl(var(--color-text))] shadow-[0_24px_70px_rgb(0_0_0/0.42)]"
+      className="group relative h-full w-full overflow-hidden rounded-[11px] border border-[hsl(var(--color-border)/0.58)] bg-[hsl(var(--color-panel)/var(--panel-opacity))] text-[hsl(var(--color-text))] shadow-[0_10px_30px_rgb(0_0_0/0.28)]"
       style={
         {
           "--panel-opacity": settings.opacity,
-          backdropFilter: settings.backgroundBlur ? "blur(28px) saturate(1.25)" : undefined
+          backdropFilter: settings.backgroundBlur ? "blur(8px)" : undefined
         } as CSSProperties
       }
     >
-      <div className="flex h-full flex-col p-3">
-        <header className="drag-region mb-3 flex shrink-0 items-start justify-between gap-2">
+      <div className="flex h-full flex-col px-2.5 py-2">
+        <header className="drag-region flex h-[28px] shrink-0 items-center justify-between gap-2 border-b border-white/10 pb-1.5">
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold leading-tight text-white">AI Usage</h1>
-            {layoutMode !== "small" ? (
-              <p className="truncate text-xs text-[hsl(var(--color-muted))]">Track usage across providers</p>
-            ) : null}
+            <h1 className="truncate text-sm font-semibold leading-tight text-white">AI Usage</h1>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {layoutMode !== "small" ? (
-              <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--color-muted))]">
-                <span className="size-2 rounded-full bg-emerald-400" />
-                Online
-              </div>
-            ) : null}
+          <div className="flex shrink-0 items-center gap-1">
+            <IconButton label="Collapse" onClick={() => collapseEdgeDock()}>
+              {collapseIcon(dockSide)}
+            </IconButton>
             <IconButton label="Refresh" onClick={() => refreshUsage(settings.demoMode)}>
-              <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              <RefreshCw className={`size-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
             </IconButton>
-            <IconButton label="Settings" onClick={() => setSettingsOpen((open) => !open)}>
-              <Settings className="size-4" />
+            <IconButton subtle label="Settings" onClick={() => setSettingsOpen((open) => !open)}>
+              <Settings className="size-3.5" />
             </IconButton>
-            <IconButton label="Hide to tray" onClick={hideToTray}>
-              <X className="size-4" />
+            <IconButton subtle label="Hide to tray" onClick={hideToTray}>
+              <X className="size-3.5" />
             </IconButton>
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 gap-2.5" style={{ gridTemplateColumns: settingsOpen && layoutMode === "large" ? "1fr 240px" : "1fr" }}>
-          <div className="no-scrollbar min-h-0 overflow-y-auto">
-            {layoutMode === "small" ? <SmallUsageList /> : <FullUsageList detailed={layoutMode === "large"} />}
+        <div className="min-h-0 flex-1">
+          <div className="no-scrollbar h-full overflow-y-auto">
+            <UsageList mode={layoutMode} />
           </div>
-          <SettingsPanel open={settingsOpen} />
         </div>
 
-        <footer className="mt-3 flex shrink-0 items-center justify-between border-t border-white/10 pt-2.5 text-xs text-[hsl(var(--color-muted))]">
-          <span>
-            {refreshFailed ? "Refresh failed" : "Updated"} {latestUpdatedAt ? formatClock(latestUpdatedAt) : "--:--"}
-          </span>
-          <div className="flex items-center gap-2">
-            <PresetButton label="Small" active={settings.sizeMode === "small"} onClick={() => choosePreset("small")} />
-            <PresetButton label="Medium" active={settings.sizeMode === "medium"} onClick={() => choosePreset("medium")} />
-            <PresetButton label="Large" active={settings.sizeMode === "large"} onClick={() => choosePreset("large")} />
-            <Info className="size-4" aria-label="Local-first demo mode is available from settings." />
-          </div>
+        <footer className="shrink-0 border-t border-white/10 pt-1.5 text-[9px] leading-tight text-[hsl(var(--color-muted))]">
+          <span>{formatChecked(latestUpdatedAt, refreshFailed, layoutMode)}</span>
         </footer>
+      </div>
+
+      <div className={`absolute inset-x-2 bottom-2 top-9 z-10 ${settingsOpen ? "block" : "hidden"}`}>
+        <SettingsPanel open={settingsOpen} />
       </div>
     </main>
   )
-
-  function choosePreset(mode: "small" | "medium" | "large") {
-    updateSettings({ sizeMode: mode })
-    applyWidgetPreset(mode)
-  }
 }
 
-function SmallUsageList() {
+function UsageList({ mode }: { mode: ReturnType<typeof inferWidgetMode> }) {
   const usage = useUsageStore((state) => state.usage)
   return (
-    <div className="space-y-2">
-      {providerOrder.map((id) => {
-        const providerUsage = usage[id]
-        if (!providerUsage) return null
-        const limit = primaryLimit(providerUsage.limits)
-        const accent = id === "claude" ? "hsl(var(--accent-claude))" : id === "codex" ? "hsl(var(--accent-codex))" : "hsl(var(--accent-chatgpt))"
-        return (
-          <div key={id} className="rounded-[8px] border border-white/10 bg-white/[0.045] p-2.5">
-            <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium">
-              <span>{providerUsage.provider === "chatgpt" ? "ChatGPT" : providerUsage.provider.charAt(0).toUpperCase() + providerUsage.provider.slice(1)}</span>
-              <span>{limit?.usedPercent ?? 0}%</span>
-            </div>
-            <ProgressBar percent={limit?.usedPercent} accent={accent} label={`${providerUsage.provider} primary usage`} />
-          </div>
-        )
-      })}
+    <div>
+      {providerOrder.map((id) => (usage[id] ? <ProviderCard key={id} usage={usage[id]!} mode={mode} /> : null))}
     </div>
   )
 }
 
-function FullUsageList({ detailed }: { detailed: boolean }) {
-  const usage = useUsageStore((state) => state.usage)
-  return (
-    <div className={detailed ? "grid gap-2.5 @container md:grid-cols-2" : "space-y-2.5"}>
-      {providerOrder.map((id) => (usage[id] ? <ProviderCard key={id} usage={usage[id]!} detailed={detailed} /> : null))}
-    </div>
-  )
-}
-
-function IconButton({ label, children, onClick }: { label: string; children: ReactNode; onClick: () => void }) {
+function IconButton({ label, children, onClick, subtle = false }: { label: string; children: ReactNode; onClick: () => void; subtle?: boolean }) {
   return (
     <button
       type="button"
-      className="grid size-8 place-items-center rounded-[8px] bg-white/8 text-[hsl(var(--color-text))] outline-none transition hover:bg-white/14 focus-visible:ring-2 focus-visible:ring-sky-300"
+      className={`grid size-6 place-items-center rounded-[6px] text-[hsl(var(--color-text))] outline-none transition hover:bg-white/12 focus-visible:ring-2 focus-visible:ring-sky-300 ${
+        subtle ? "opacity-0 group-hover:opacity-70 focus-visible:opacity-100" : "bg-transparent opacity-80"
+      }`}
       aria-label={label}
       title={label}
       onClick={onClick}
@@ -205,18 +207,26 @@ function IconButton({ label, children, onClick }: { label: string; children: Rea
   )
 }
 
-function PresetButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      className={`grid size-6 place-items-center rounded-[7px] text-[9px] outline-none transition focus-visible:ring-2 focus-visible:ring-sky-300 ${
-        active ? "bg-white/16 text-white" : "bg-transparent text-[hsl(var(--color-muted))] hover:bg-white/10"
-      }`}
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-    >
-      {label[0]}
-    </button>
-  )
+function collapseIcon(side: DockSide) {
+  const Icon = side === "left" ? ChevronLeft : ChevronRight
+  return <Icon className="size-3.5" />
+}
+
+function formatChecked(iso: string | undefined, failed: boolean, mode: ReturnType<typeof inferWidgetMode>) {
+  if (!iso) return failed ? "Checked -- \u00b7 Failed" : "Checked --"
+  const ago = formatAgo(iso)
+  if (failed) return `Checked ${ago} \u00b7 Failed`
+  if (mode === "small") return `Checked ${ago}`
+  return `Checked ${ago} \u00b7 ${formatClock(iso)}`
+}
+
+function formatAgo(iso: string, now = new Date()) {
+  const diffMs = now.getTime() - new Date(iso).getTime()
+  if (Number.isNaN(diffMs)) return "--"
+  const minutes = Math.max(0, Math.floor(diffMs / 60000))
+  if (minutes < 1) return "now"
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
 }

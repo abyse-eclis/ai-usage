@@ -1,14 +1,14 @@
 import type { WidgetLayoutSnapshot, WidgetPreset, WidgetSizeMode } from "../types/widget"
 
 export const widgetPresets: Record<Exclude<WidgetSizeMode, "custom">, WidgetPreset> = {
-  small: { mode: "small", width: 260, height: 180 },
-  medium: { mode: "medium", width: 320, height: 420 },
-  large: { mode: "large", width: 460, height: 600 }
+  small: { mode: "small", width: 220, height: 180 },
+  medium: { mode: "medium", width: 250, height: 240 },
+  large: { mode: "large", width: 300, height: 360 }
 }
 
 export function inferWidgetMode(size: WidgetLayoutSnapshot): WidgetSizeMode {
-  if (size.width < 300 || size.height < 260) return "small"
-  if (size.width >= 430 && size.height >= 540) return "large"
+  if (size.width < 235 || size.height < 210) return "small"
+  if (size.width >= 285 && size.height >= 330) return "large"
   return "medium"
 }
 
