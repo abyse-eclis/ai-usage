@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { popupPinnedEvent, requestPopupDismiss } from "../services/companionPopup"
 import { useCompanionData } from "../hooks/useCompanionData"
 import { companionLog } from "../utils/log"
-import { remainingColor } from "./TaskbarCompanion"
+import { remainingColor } from "../utils/remainingColor"
 import { ProviderIcon } from "../../../shared/components/ProviderIcon"
 
 /**

@@ -12,6 +12,7 @@ import {
 import { positionTaskbarCompanion, setCompanionContentWidth } from "../services/taskbarCompanionWindow"
 import { useCompanionData } from "../hooks/useCompanionData"
 import { companionLog } from "../utils/log"
+import { remainingColor } from "../utils/remainingColor"
 import type { CompanionProviderData } from "../utils/taskbarCompanion"
 import { ProviderIcon } from "../../../shared/components/ProviderIcon"
 
@@ -207,11 +208,4 @@ function estimateContentWidth(providers: CompanionProviderData[]) {
 function summaryLabel(providers: CompanionProviderData[]) {
   if (providers.length === 0) return "AI usage"
   return `${providers.map((entry) => entry.providerLabel).join(", ")} usage`
-}
-
-export function remainingColor(remainingPercent?: number) {
-  if (remainingPercent === undefined) return "text-[#a9a9a9]"
-  if (remainingPercent <= 10) return "text-[hsl(var(--state-critical))]"
-  if (remainingPercent <= 20) return "text-[hsl(var(--state-warning))]"
-  return "text-white"
 }

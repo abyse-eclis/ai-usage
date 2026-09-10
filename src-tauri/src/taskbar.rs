@@ -55,10 +55,10 @@ mod imp {
         DefSubclassProc, SHAppBarMessage, SetWindowSubclass, ABM_GETSTATE, ABS_AUTOHIDE, APPBARDATA,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, GetWindowRect,
-        SetWindowLongPtrW, MA_NOACTIVATE, MONITORINFOF_PRIMARY,
-        SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        WM_MOUSEACTIVATE, WS_EX_NOACTIVATE,
+        EnumWindows, GetClassNameW, GetCursorPos, GetTopWindow, GetWindow, GetWindowLongPtrW,
+        GetWindowRect, SetWindowLongPtrW, MA_NOACTIVATE, MONITORINFOF_PRIMARY,
+        SetWindowPos, GWL_EXSTYLE, GW_HWNDNEXT, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, WM_MOUSEACTIVATE, WS_EX_NOACTIVATE,
     };
 
     const TASKBAR_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
@@ -258,6 +258,34 @@ mod imp {
         Some((f64::from(point.x), f64::from(point.y)))
     }
 
+    /// True when a taskbar window sits in front of `hwnd` in the z-order.
+    ///
+    /// The taskbar is topmost too, and Explorer re-raises it from time to time
+    /// (and on its own repaints). When that happens the companion keeps
+    /// drawing correctly at the right place but is hidden underneath the
+    /// taskbar, which looks exactly like the window having vanished.
+    pub fn is_behind_taskbar(hwnd: HWND) -> bool {
+        let bars = taskbar_windows();
+        if bars.is_empty() {
+            return false;
+        }
+        let mut current = unsafe { GetTopWindow(None) }.unwrap_or_default();
+        // Front to back: whichever of the two is met first is the one on top.
+        while !current.0.is_null() {
+            if current == hwnd {
+                return false;
+            }
+            if bars.contains(&current) {
+                return true;
+            }
+            current = match unsafe { GetWindow(current, GW_HWNDNEXT) } {
+                Ok(next) => next,
+                Err(_) => break,
+            };
+        }
+        false
+    }
+
     /// Re-asserts topmost z-order without activating the window, so the
     /// companion stays drawn over the taskbar and the popup over other apps.
     pub fn raise_topmost_no_activate(hwnd: HWND) {
@@ -308,8 +336,8 @@ pub fn taskbar_for_monitor(monitor_id: Option<&str>, last_used: Option<&str>) ->
 
 #[cfg(windows)]
 pub use imp::{
-    cursor_position, deliver_clicks_without_activation, escape_down, primary_mouse_down,
-    raise_topmost_no_activate, set_no_activate,
+    cursor_position, deliver_clicks_without_activation, escape_down, is_behind_taskbar,
+    primary_mouse_down, raise_topmost_no_activate, set_no_activate,
 };
 
 #[cfg(not(windows))]

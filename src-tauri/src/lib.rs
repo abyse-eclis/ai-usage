@@ -503,6 +503,15 @@ fn watch_taskbar(app: AppHandle) {
             },
         };
         let _ = apply_companion_placement(&app, placement, false);
+
+        // Placement alone is not enough to stay seen: the shell can put its
+        // taskbar in front of us without anything about our own window
+        // changing.
+        if let Some(window) = app.get_webview_window("taskbar-companion") {
+            if window.is_visible().unwrap_or(false) {
+                keep_above_taskbar(&window);
+            }
+        }
     });
 }
 
@@ -765,6 +774,23 @@ fn raise_no_activate(window: &WebviewWindow) {
 
 #[cfg(not(windows))]
 fn raise_no_activate(_window: &WebviewWindow) {}
+
+/// The taskbar is topmost too, and Explorer keeps re-raising it, which buries
+/// the companion: it still draws, at the right size and place, but nothing of
+/// it reaches the screen. Re-raising only when it is actually underneath keeps
+/// us from fighting the shell for z-order on every poll.
+#[cfg(windows)]
+fn keep_above_taskbar(window: &WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        if taskbar::is_behind_taskbar(hwnd) {
+            debug_log("[Companion] re-raised above the taskbar");
+            taskbar::raise_topmost_no_activate(hwnd);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn keep_above_taskbar(_window: &WebviewWindow) {}
 
 #[tauri::command]
 fn get_edge_dock_state(app: AppHandle) -> EdgeDockSnapshot {
