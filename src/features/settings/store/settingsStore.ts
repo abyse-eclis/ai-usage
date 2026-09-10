@@ -3,7 +3,8 @@ import { persist } from "zustand/middleware"
 import { defaultThresholds } from "../../../shared/utils/thresholds"
 import type { AppSettings } from "../types/settings"
 
-const envDemo = import.meta.env.VITE_DEMO_MODE !== "false"
+// Real Claude and Codex readings come from local files, so demo data is now opt-in.
+const envDemo = import.meta.env.VITE_DEMO_MODE === "true"
 
 const defaults: AppSettings = {
   launchAtStartup: false,
@@ -41,7 +42,15 @@ export const useSettingsStore = create<SettingsStore>()(
       resetSettings: () => set({ settings: defaults })
     }),
     {
-      name: "ai-usage-settings"
+      name: "ai-usage-settings",
+      version: 2,
+      // v1 shipped with demo mode forced on. Clear that stored preference once so
+      // existing installs land on the real providers.
+      migrate: (persisted, version) => {
+        const state = persisted as { settings?: AppSettings } | undefined
+        if (version >= 2 || !state?.settings) return state
+        return { ...state, settings: { ...state.settings, demoMode: envDemo } }
+      }
     }
   )
 )

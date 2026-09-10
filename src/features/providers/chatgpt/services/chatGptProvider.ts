@@ -1,5 +1,10 @@
 import type { ProviderUsage, UsageProvider } from "../../../../shared/types/usage"
 
+/**
+ * The Codex CLI rollouts expose the Codex quota only. Nothing on this machine
+ * records the separate ChatGPT conversation quota, so this provider stays
+ * unavailable rather than mirroring the Codex percentages under a second name.
+ */
 export const chatGptProvider: UsageProvider = {
   id: "chatgpt",
   name: "ChatGPT",
@@ -13,7 +18,8 @@ export const chatGptProvider: UsageProvider = {
     limits: [],
     error: {
       code: "USAGE_UNAVAILABLE",
-      message: "This limit is not exposed by ChatGPT through a verified public source."
+      message:
+        "ChatGPT conversation limits have no local source. The Codex card shows the OpenAI plan quota."
     }
   })
 }

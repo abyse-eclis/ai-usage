@@ -1,3 +1,5 @@
+mod usage;
+
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{
@@ -326,7 +328,9 @@ pub fn run() {
             set_always_on_top,
             resize_widget,
             set_skip_taskbar,
-            hide_widget
+            hide_widget,
+            usage::read_claude_usage,
+            usage::read_codex_usage
         ])
         .setup(|app| {
             let persisted_state = read_widget_state(app.handle());
