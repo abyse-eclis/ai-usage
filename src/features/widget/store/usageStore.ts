@@ -1,7 +1,15 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
+import { emit } from "@tauri-apps/api/event"
 import type { ProviderId, ProviderUsage, UsageCacheRecord } from "../../../shared/types/usage"
 import { getUsageProviders } from "../../providers/shared/providerRegistry"
+
+export interface UsageStateSnapshot {
+  usage: Partial<Record<ProviderId, ProviderUsage>>
+  cache: Partial<Record<ProviderId, UsageCacheRecord>>
+  refreshFailed: boolean
+  lastRefreshError?: string
+}
 
 interface UsageStore {
   usage: Partial<Record<ProviderId, ProviderUsage>>
@@ -10,6 +18,7 @@ interface UsageStore {
   refreshFailed: boolean
   lastRefreshError?: string
   refreshUsage: (demoMode: boolean) => Promise<void>
+  applySnapshot: (snapshot: UsageStateSnapshot) => void
 }
 
 export const useUsageStore = create<UsageStore>()(
@@ -19,6 +28,13 @@ export const useUsageStore = create<UsageStore>()(
       cache: {},
       isRefreshing: false,
       refreshFailed: false,
+      applySnapshot: (snapshot) =>
+        set({
+          usage: snapshot.usage,
+          cache: snapshot.cache,
+          refreshFailed: snapshot.refreshFailed,
+          lastRefreshError: snapshot.lastRefreshError
+        }),
       refreshUsage: async (demoMode) => {
         set({ isRefreshing: true, refreshFailed: false, lastRefreshError: undefined })
         const providers = getUsageProviders(demoMode)
@@ -62,7 +78,9 @@ export const useUsageStore = create<UsageStore>()(
             } satisfies ProviderUsage)
         })
 
-        set({ usage, cache, isRefreshing: false, refreshFailed, lastRefreshError })
+        const snapshot = { usage, cache, refreshFailed, lastRefreshError }
+        set({ ...snapshot, isRefreshing: false })
+        emit("usage-state-updated", snapshot).catch(() => undefined)
       }
     }),
     {

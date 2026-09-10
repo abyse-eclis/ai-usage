@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for AI Usage Monitor",
-  "windows": ["main"],
+  "windows": ["main", "taskbar-companion"],
   "permissions": [
     "core:default",
     "core:window:default",

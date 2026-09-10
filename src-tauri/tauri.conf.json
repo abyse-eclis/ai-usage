@@ -26,6 +26,23 @@
         "skipTaskbar": true,
         "shadow": false,
         "dragDropEnabled": false
+      },
+      {
+        "label": "taskbar-companion",
+        "url": "/companion",
+        "title": "Claude Usage",
+        "width": 190,
+        "height": 44,
+        "minWidth": 150,
+        "minHeight": 36,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

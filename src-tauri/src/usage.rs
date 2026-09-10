@@ -160,6 +160,7 @@ fn claude_usage_at(path: &Path) -> Result<ClaudeUsageSnapshot, String> {
     let windows: Vec<UsageWindow> = [
         ("five_hour", "Session (5h)"),
         ("seven_day", "Weekly"),
+        ("seven_day_fable", "Fable"),
         ("seven_day_opus", "Weekly Opus"),
         ("seven_day_sonnet", "Weekly Sonnet"),
     ]

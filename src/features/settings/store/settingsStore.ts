@@ -23,7 +23,17 @@ const defaults: AppSettings = {
   debugLogs: false,
   experimentalProviders: false,
   thresholds: defaultThresholds,
-  notificationsEnabled: true
+  notificationsEnabled: true,
+  taskbarCompanion: {
+    enabled: false,
+    primaryProvider: "claude",
+    timeFormat: "24-hour",
+    hoverPopupEnabled: true,
+    clickToPinEnabled: true,
+    showFiveHour: true,
+    showWeekly: true,
+    showFable: true
+  }
 }
 
 interface SettingsStore {
@@ -44,7 +54,7 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: "ai-usage-settings",
-      version: 3,
+      version: 4,
       // v1 shipped with demo mode forced on. Clear that stored preference once so
       // existing installs land on the real providers.
       migrate: (persisted, version) => {
@@ -52,7 +62,11 @@ export const useSettingsStore = create<SettingsStore>()(
         if (!state?.settings) return state
         const settings = {
           ...state.settings,
-          autoCollapseWhenDocked: state.settings.autoCollapseWhenDocked ?? defaults.autoCollapseWhenDocked
+          autoCollapseWhenDocked: state.settings.autoCollapseWhenDocked ?? defaults.autoCollapseWhenDocked,
+          taskbarCompanion: {
+            ...defaults.taskbarCompanion,
+            ...state.settings.taskbarCompanion
+          }
         }
         if (version < 2) settings.demoMode = envDemo
         return { ...state, settings }

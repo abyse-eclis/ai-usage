@@ -14,6 +14,7 @@ const SMALL_SIZE: (f64, f64) = (220.0, 180.0);
 const MEDIUM_SIZE: (f64, f64) = (250.0, 240.0);
 const LARGE_SIZE: (f64, f64) = (300.0, 360.0);
 const COLLAPSED_SIZE: (f64, f64) = (32.0, 64.0);
+const TASKBAR_COMPANION_SIZE: (f64, f64) = (190.0, 44.0);
 const SNAP_DISTANCE: f64 = 18.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -103,6 +104,54 @@ fn set_skip_taskbar(window: WebviewWindow, enabled: bool) -> Result<(), String> 
 #[tauri::command]
 fn hide_widget(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_taskbar_companion_visible(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("taskbar-companion") else {
+        return Ok(());
+    };
+    if enabled {
+        position_taskbar_companion(app.clone())?;
+        window.show().map_err(|error| error.to_string())?;
+        window
+            .set_always_on_top(true)
+            .map_err(|error| error.to_string())?;
+        window
+            .set_skip_taskbar(true)
+            .map_err(|error| error.to_string())?;
+    } else {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn position_taskbar_companion(app: AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("taskbar-companion") else {
+        return Ok(());
+    };
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|main| main.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten())
+        .or_else(|| app.available_monitors().ok().and_then(|monitors| monitors.into_iter().next()))
+        .ok_or_else(|| "No monitor is available for the taskbar companion.".to_string())?;
+    let scale = monitor.scale_factor();
+    let width = (TASKBAR_COMPANION_SIZE.0 * scale).round() as u32;
+    let height = (TASKBAR_COMPANION_SIZE.1 * scale).round() as u32;
+    let margin = (8.0 * scale).round() as i32;
+    let area = monitor.work_area();
+    let x = area.position.x + area.size.width as i32 - width as i32 - margin;
+    let y = area.position.y + area.size.height as i32 - height as i32 - margin;
+
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(x.max(area.position.x), y.max(area.position.y)))
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -824,6 +873,8 @@ pub fn run() {
             resize_widget,
             set_skip_taskbar,
             hide_widget,
+            set_taskbar_companion_visible,
+            position_taskbar_companion,
             get_edge_dock_state,
             collapse_to_edge,
             expand_from_edge,

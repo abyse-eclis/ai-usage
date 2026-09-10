@@ -9,6 +9,7 @@ import type { DockSide, EdgeDockState } from "../../edge-dock/types/edgeDock"
 import { notifyThresholds } from "../../notifications/services/notifications"
 import { SettingsPanel } from "../../settings/components/SettingsPanel"
 import { useSettingsStore } from "../../settings/store/settingsStore"
+import { setTaskbarCompanionVisible } from "../../taskbar-companion/services/taskbarCompanionWindow"
 import { applyWidgetPreset, hideToTray, setAlwaysOnTop, setSkipTaskbar } from "../../window-manager/services/windowManager"
 import { useContainerSize } from "../hooks/useContainerSize"
 import { useUsageStore } from "../store/usageStore"
@@ -62,6 +63,10 @@ export function Widget() {
   useEffect(() => {
     setSkipTaskbar(settings.hideFromTaskbar)
   }, [settings.hideFromTaskbar])
+
+  useEffect(() => {
+    setTaskbarCompanionVisible(settings.taskbarCompanion.enabled)
+  }, [settings.taskbarCompanion.enabled])
 
   useEffect(() => {
     const unlisteners = [

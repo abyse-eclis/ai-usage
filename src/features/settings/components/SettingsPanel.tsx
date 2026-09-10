@@ -55,6 +55,62 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
         <Toggle label="Hide from taskbar" checked={settings.hideFromTaskbar} onChange={(hideFromTaskbar) => updateSettings({ hideFromTaskbar })} />
       </Section>
 
+      <Section icon={<Monitor className="size-4" />} title="Taskbar Companion">
+        <Toggle
+          label="Enabled"
+          checked={settings.taskbarCompanion.enabled}
+          onChange={(enabled) => updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, enabled } })}
+        />
+        <ProviderRow name="Primary Provider" status="Claude" />
+        <ProviderRow name="Display" status="Claude 45% 23:00" />
+        <label className="field">
+          <span>Time format</span>
+          <select
+            value={settings.taskbarCompanion.timeFormat}
+            onChange={(event) =>
+              updateSettings({
+                taskbarCompanion: {
+                  ...settings.taskbarCompanion,
+                  timeFormat: event.target.value as typeof settings.taskbarCompanion.timeFormat
+                }
+              })
+            }
+          >
+            <option value="24-hour">24-hour</option>
+            <option value="12-hour">12-hour</option>
+          </select>
+        </label>
+        <Toggle
+          label="Hover popup"
+          checked={settings.taskbarCompanion.hoverPopupEnabled}
+          onChange={(hoverPopupEnabled) =>
+            updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, hoverPopupEnabled } })
+          }
+        />
+        <Toggle
+          label="Click to pin"
+          checked={settings.taskbarCompanion.clickToPinEnabled}
+          onChange={(clickToPinEnabled) =>
+            updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, clickToPinEnabled } })
+          }
+        />
+        <Toggle
+          label="5h"
+          checked={settings.taskbarCompanion.showFiveHour}
+          onChange={(showFiveHour) => updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, showFiveHour } })}
+        />
+        <Toggle
+          label="Weekly"
+          checked={settings.taskbarCompanion.showWeekly}
+          onChange={(showWeekly) => updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, showWeekly } })}
+        />
+        <Toggle
+          label="Fable"
+          checked={settings.taskbarCompanion.showFable}
+          onChange={(showFable) => updateSettings({ taskbarCompanion: { ...settings.taskbarCompanion, showFable } })}
+        />
+      </Section>
+
       <Section icon={<Palette className="size-4" />} title="Appearance">
         <label className="field">
           <span>Opacity</span>
