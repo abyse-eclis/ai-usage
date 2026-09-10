@@ -8,8 +8,9 @@ export interface CompanionLimitRow {
   kind: CompanionLimitKind
   /** Name of the window this row covers, spelled out for the popup. */
   label: string
-  remainingPercent?: number
-  /** What the strip prints: "90%" for percent limits, "19" for counted ones. */
+  /** Share of the window already consumed. Drives the colour and the value. */
+  usedPercent?: number
+  /** What the strip prints: "35%" for percent limits, "31" for counted ones. */
   valueText: string
   /**
    * What the value counts, for the popup only -- "msgs" for a counted limit,
@@ -17,6 +18,11 @@ export interface CompanionLimitRow {
    */
   valueUnit?: string
   resetText?: string
+  /**
+   * The window this reading belongs to already rolled over, so the number is
+   * describing a period that has ended and says nothing about the new one.
+   */
+  stale?: boolean
 }
 
 /** One provider's slice of the summary strip and of the popup. */
@@ -58,13 +64,14 @@ export const companionProviderLabels: Record<ProviderId, string> = {
 /** Strip order. Claude leads because it is the companion's primary provider. */
 export const companionProviderOrder: ProviderId[] = ["claude", "codex", "chatgpt"]
 
-export function usedToRemainingPercent(usedPercent?: number) {
-  if (usedPercent === undefined || Number.isNaN(usedPercent)) return undefined
-  return clampPercent(100 - usedPercent)
+export function remainingToUsedPercent(remainingPercent?: number) {
+  if (remainingPercent === undefined || Number.isNaN(remainingPercent)) return undefined
+  return clampPercent(100 - remainingPercent)
 }
 
-export function displayRemainingPercent(limit: UsageLimit) {
-  return limit.remainingPercent ?? usedToRemainingPercent(limit.usedPercent)
+/** Providers report one side or the other; the companion always shows usage. */
+export function displayUsedPercent(limit: UsageLimit) {
+  return limit.usedPercent ?? remainingToUsedPercent(limit.remainingPercent)
 }
 
 interface BuildArgs {
@@ -135,7 +142,13 @@ function buildProviderData(
       if (row && shouldShow(row.kind, show, provider)) items.push(row)
       return items
     }, []) ?? []
-  const primary = rows.find((row) => row.kind === "fiveHour") ?? rows[0]
+  // The strip has room for one number, so prefer one that is still true: the
+  // 5-hour window normally, but a longer window when that reading has expired.
+  const primary =
+    rows.find((row) => row.kind === "fiveHour" && !row.stale) ??
+    rows.find((row) => !row.stale) ??
+    rows.find((row) => row.kind === "fiveHour") ??
+    rows[0]
   const checkedAt = source?.lastSuccessfulAt ?? cached?.lastSuccessfulAt ?? source?.updatedAt ?? cached?.updatedAt
   const usingCache = source !== liveUsage && cached !== undefined
   const status: CompanionStatus =
@@ -165,28 +178,29 @@ export function toCompanionRow(
 ): CompanionLimitRow | undefined {
   const kind = classifyLimit(limit, provider)
   if (!kind) return undefined
+  // A reset time in the past means the source has not been refreshed since the
+  // window rolled over. Showing the old percentage would be stating something
+  // untrue about the current window, so the row reads as unknown instead.
+  const stale = hasRolledOver(limit, now)
   return {
     kind,
     label: companionLabel(kind, limit),
-    remainingPercent: displayRemainingPercent(limit),
-    valueText: limitValueText(limit),
-    valueUnit: limitValueUnit(limit),
-    resetText: formatCompanionReset(limit.resetAt, kind === "fiveHour" ? "compact" : "weekday", now, timeFormat)
+    usedPercent: stale ? undefined : displayUsedPercent(limit),
+    valueText: stale ? "--" : limitValueText(limit),
+    valueUnit: stale ? undefined : limitValueUnit(limit),
+    resetText: formatCompanionReset(limit.resetAt, kind === "fiveHour" ? "compact" : "weekday", now, timeFormat),
+    stale
   } satisfies CompanionLimitRow
 }
 
 /**
- * Percent limits read as remaining percent; limits counted in messages or
- * credits read as the raw remaining count, which is what the account shows.
+ * Percent limits read as the percentage consumed; limits counted in messages
+ * or credits read as the raw number consumed.
  */
 export function limitValueText(limit: UsageLimit) {
   const counted = limit.unit === "messages" || limit.unit === "credits" || limit.unit === "tokens"
-  if (counted && limit.used !== undefined && limit.total !== undefined) {
-    return formatCount(Math.max(0, limit.total - limit.used))
-  }
-  const remaining = displayRemainingPercent(limit)
-  if (remaining === undefined && counted && limit.used !== undefined) return formatCount(limit.used)
-  return formatRemaining(remaining)
+  if (counted && limit.used !== undefined) return formatCount(limit.used)
+  return formatPercent(displayUsedPercent(limit))
 }
 
 export function formatCompanionReset(
@@ -212,7 +226,14 @@ export function formatCheckedText(checkedAt: string | undefined, status: Compani
   return `Checked ${ago}`
 }
 
-export function formatRemaining(value?: number) {
+/** True once the period a reading describes has already ended. */
+export function hasRolledOver(limit: UsageLimit, now = new Date()) {
+  if (!limit.resetAt) return false
+  const resetAt = new Date(limit.resetAt).getTime()
+  return !Number.isNaN(resetAt) && resetAt <= now.getTime()
+}
+
+export function formatPercent(value?: number) {
   return value === undefined ? "--" : `${clampPercent(value)}%`
 }
 

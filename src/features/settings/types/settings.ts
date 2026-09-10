@@ -26,6 +26,19 @@ export interface PresentationSettings {
   edgeDockEnabled: boolean
 }
 
+/**
+ * Commands run to make a provider's CLI write a fresh reading to disk.
+ *
+ * Both CLIs only record usage as a side effect of a real request, so running
+ * one spends quota. That is why these are empty by default, are edited by the
+ * user rather than guessed, and fire only on an explicit reload -- never on the
+ * automatic refresh interval.
+ */
+export interface CliRefreshSettings {
+  claudeCommand: string
+  codexCommand: string
+}
+
 export interface AppSettings {
   launchAtStartup: boolean
   refreshIntervalMinutes: 1 | 3 | 5 | 10 | 15 | 30
@@ -45,5 +58,6 @@ export interface AppSettings {
   thresholds: UsageThresholds
   notificationsEnabled: boolean
   taskbarCompanion: TaskbarCompanionSettings
+  cliRefresh: CliRefreshSettings
   presentation: PresentationSettings
 }

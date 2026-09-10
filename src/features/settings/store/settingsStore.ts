@@ -34,6 +34,12 @@ const defaults: AppSettings = {
     showFable: true,
     taskbarMonitorId: ""
   },
+  // Empty means "read the files only". Running a CLI costs quota, so nothing
+  // is assumed on the user's behalf.
+  cliRefresh: {
+    claudeCommand: "",
+    codexCommand: ""
+  },
   // Presentation modes are independent windows. This is the local mirror of
   // Rust's persisted state (the actual source of truth for visibility); it
   // is hydrated/kept in sync via windowManager's restorePresentationState
@@ -63,7 +69,7 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: "ai-usage-settings",
-      version: 6,
+      version: 7,
       // v1 shipped with demo mode forced on. Clear that stored preference once so
       // existing installs land on the real providers.
       migrate: (persisted, version) => {
@@ -75,6 +81,7 @@ export const useSettingsStore = create<SettingsStore>()(
         const settings = {
           ...state.settings,
           autoCollapseWhenDocked: state.settings.autoCollapseWhenDocked ?? defaults.autoCollapseWhenDocked,
+          cliRefresh: { ...defaults.cliRefresh, ...state.settings.cliRefresh },
           taskbarCompanion: {
             ...defaults.taskbarCompanion,
             ...legacyTaskbarCompanion

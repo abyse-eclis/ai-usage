@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event"
+import { RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   companionPopupSize,
@@ -9,14 +10,22 @@ import {
   setCompanionPopupPinned,
   showCompanionPopup
 } from "../services/companionPopup"
+import { refreshFinishedEvent, requestUsageRefresh } from "../services/companionRefresh"
 import { positionTaskbarCompanion, setCompanionContentWidth } from "../services/taskbarCompanionWindow"
 import { useCompanionData } from "../hooks/useCompanionData"
 import { companionLog } from "../utils/log"
-import { remainingColor } from "../utils/remainingColor"
+import { usageColor } from "../utils/usageColor"
+import type { UsageThresholds } from "../../../shared/utils/thresholds"
 import type { CompanionProviderData } from "../utils/taskbarCompanion"
 import { ProviderIcon } from "../../../shared/components/ProviderIcon"
 
 const closeDelayMs = 300
+/**
+ * Backstop for the spinner. It has to outlast a CLI command (which Rust caps
+ * at 90 seconds) so a slow-but-working refresh is not reported as finished
+ * while it is still going.
+ */
+const refreshSpinCapMs = 95000
 
 /**
  * The strip that sits inside the Windows taskbar. It shows one segment per
@@ -26,10 +35,12 @@ const closeDelayMs = 300
  * Providers are identified by their image icon only. No letter badges.
  */
 export function TaskbarCompanion() {
-  const { data, companion } = useCompanionData()
+  const { data, companion, settings } = useCompanionData()
+  const thresholds = settings.thresholds
   const [overCompanion, setOverCompanion] = useState(false)
   const [overPopup, setOverPopup] = useState(false)
   const [pinned, setPinned] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const dismissedAt = useRef(0)
   const content = useRef<HTMLSpanElement | null>(null)
   /** Size the popup window is currently showing at, or undefined while hidden. */
@@ -55,6 +66,28 @@ export function TaskbarCompanion() {
     const width = (measured > 0 ? measured : estimateContentWidth(providers)) + stripPaddingPx
     setCompanionContentWidth(width).catch(() => undefined)
   }, [providers])
+
+  useEffect(() => {
+    if (!refreshing) return
+    // The fetch runs in the Main Widget window, so "done" arrives as a new
+    // snapshot rather than a resolved promise. The timeout is the backstop for
+    // a refresh that fails or returns nothing new.
+    const timer = window.setTimeout(() => setRefreshing(false), refreshSpinCapMs)
+    return () => window.clearTimeout(timer)
+  }, [refreshing])
+
+  useEffect(() => {
+    setRefreshing(false)
+  }, [data.checkedText, providers])
+
+  // The widget says when a refresh has settled, which is the only reliable
+  // signal when a CLI command is part of it and takes tens of seconds.
+  useEffect(() => {
+    const unlisten = listen(refreshFinishedEvent, () => setRefreshing(false))
+    return () => {
+      unlisten.then((dispose) => dispose()).catch(() => undefined)
+    }
+  }, [])
 
   // One hover state for both windows, fed by the cursor watcher in Rust. That
   // is what lets the pointer travel from the companion into the popup (and
@@ -114,6 +147,12 @@ export function TaskbarCompanion() {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
+  const onRefresh = useCallback(() => {
+    companionLog("[Companion] refresh requested")
+    setRefreshing(true)
+    requestUsageRefresh().catch(() => undefined)
+  }, [])
+
   const onClick = useCallback(() => {
     if (!companion.clickToPinEnabled) return
     // A click that lands right after the popup dismissed itself (focus loss)
@@ -134,23 +173,31 @@ export function TaskbarCompanion() {
   }, [companion.clickToPinEnabled])
 
   return (
-    <main data-taskbar-companion-root className="h-full w-full">
-      <button
-        type="button"
-        className="flex h-full w-full items-center gap-[12px] rounded-[6px] border border-white/[0.06] bg-[#1c1c1c]/[0.94] px-[10px] text-[13.5px] leading-none text-[#e8e8e8] outline-none transition-colors duration-150 hover:bg-[#2f2f2f]/[0.96] focus-visible:outline-none"
-        aria-label={summaryLabel(providers)}
-        aria-expanded={open}
-        onMouseEnter={() => {
-          // Fast path so the popup appears without waiting for the next poll;
-          // the watcher stays authoritative for when it closes again.
-          companionLog("[Companion] enter")
-          setOverCompanion(true)
-        }}
-        onClick={onClick}
-      >
-        <span ref={content} className="flex items-center gap-[12px]">
+    <main
+      data-taskbar-companion-root
+      className="flex h-full w-full items-center gap-[8px] rounded-[6px] border border-white/[0.06] bg-[#1c1c1c]/[0.94] px-[10px] text-[13.5px] leading-none text-[#e8e8e8]"
+      onMouseEnter={() => {
+        // Fast path so the popup appears without waiting for the next poll;
+        // the watcher stays authoritative for when it closes again.
+        companionLog("[Companion] enter")
+        setOverCompanion(true)
+      }}
+    >
+      {/* `w-max` keeps this sized to its content even while the native window
+          is still narrower, so the measurement below is the width the strip
+          actually needs rather than the width it is being squeezed into. */}
+      <span ref={content} className="flex w-max items-center gap-[8px]">
+        <button
+          type="button"
+          className="flex items-center gap-[12px] rounded-[4px] outline-none focus-visible:outline-none"
+          aria-label={summaryLabel(providers)}
+          aria-expanded={open}
+          onClick={onClick}
+        >
           {providers.length > 0 ? (
-            providers.map((entry) => <CompanionSegment key={entry.provider} entry={entry} />)
+            providers.map((entry) => (
+              <CompanionSegment key={entry.provider} entry={entry} thresholds={thresholds} />
+            ))
           ) : (
             // Nothing to report yet: the strip keeps its icon and shows a dash,
             // so the companion never blinks out of the taskbar.
@@ -159,22 +206,38 @@ export function TaskbarCompanion() {
               <span className="tabular-nums text-[#a9a9a9]">--</span>
             </span>
           )}
-        </span>
-      </button>
+        </button>
+        <button
+          type="button"
+          className="flex size-[20px] shrink-0 items-center justify-center rounded-[4px] text-[#a9a9a9] outline-none transition-colors duration-150 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none"
+          aria-label="Refresh usage now"
+          data-companion-refresh
+          onClick={onRefresh}
+        >
+          <RefreshCw className={`size-[13px] ${refreshing ? "animate-spin" : ""}`} aria-hidden />
+        </button>
+      </span>
     </main>
   )
 }
 
-function CompanionSegment({ entry }: { entry: CompanionProviderData }) {
+function CompanionSegment({ entry, thresholds }: { entry: CompanionProviderData; thresholds: UsageThresholds }) {
   const primary = entry.primary
 
   return (
-    <span className="flex shrink-0 items-center gap-[6px]" data-companion-segment={entry.provider}>
+    <span
+      className="flex shrink-0 items-center gap-[6px] whitespace-nowrap"
+      data-companion-segment={entry.provider}
+    >
       <ProviderIcon provider={entry.provider} size={16} surface="dark" />
-      <span className={`text-[14.5px] font-semibold tabular-nums ${remainingColor(primary?.remainingPercent)}`}>
+      <span
+        className={`shrink-0 whitespace-nowrap text-[14.5px] font-semibold tabular-nums ${usageColor(primary?.usedPercent, thresholds)}`}
+      >
         {primary?.valueText ?? "--"}
       </span>
-      <span className="tabular-nums text-[#a9a9a9]">{primary?.resetText ?? "--"}</span>
+      <span className="shrink-0 whitespace-nowrap tabular-nums text-[#a9a9a9]">
+        {primary?.resetText ?? "--"}
+      </span>
     </span>
   )
 }
@@ -184,6 +247,8 @@ const stripPaddingPx = 22
 const iconWidthPx = 16
 const segmentGapPx = 12
 const innerGapPx = 6
+/** The refresh button plus the gap before it. */
+const refreshButtonPx = 28
 /** Rough advance widths for the two type sizes the strip uses. */
 const valueCharPx = 8.5
 const resetCharPx = 7.5
@@ -194,14 +259,14 @@ const resetCharPx = 7.5
  * just leaves a little slack, while a short one clips the reset time.
  */
 function estimateContentWidth(providers: CompanionProviderData[]) {
-  if (providers.length === 0) return iconWidthPx + innerGapPx + 2 * valueCharPx
+  if (providers.length === 0) return iconWidthPx + innerGapPx + 2 * valueCharPx + refreshButtonPx
   const segments = providers.map((entry) => {
     const value = entry.primary?.valueText ?? "--"
     const reset = entry.primary?.resetText ?? "--"
     return iconWidthPx + innerGapPx + value.length * valueCharPx + innerGapPx + reset.length * resetCharPx
   })
   const total = segments.reduce((sum, width) => sum + width, 0)
-  return Math.ceil(total + (providers.length - 1) * segmentGapPx)
+  return Math.ceil(total + (providers.length - 1) * segmentGapPx + refreshButtonPx)
 }
 
 /** The icons carry the identity visually; screen readers get the names here. */

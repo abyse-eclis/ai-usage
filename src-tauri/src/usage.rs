@@ -50,9 +50,15 @@ fn home_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
         .map_err(|error| format!("Could not resolve the home directory: {error}"))
 }
 
-/// Reads the last line of `path` that contains `needle`, scanning backwards in
-/// chunks so a multi-megabyte rollout never has to be loaded into memory.
-fn last_line_containing(path: &Path, needle: &str) -> Option<String> {
+/// Reads the last line of `path` that contains `needle` *and* satisfies
+/// `accept`, scanning backwards in chunks so a multi-megabyte rollout never has
+/// to be loaded into memory.
+///
+/// The predicate matters: Codex keeps writing rate-limit events after a session
+/// stops reporting numbers, so the final mention of the needle is often empty.
+/// Without `accept` that empty tail hides the real reading earlier in the same
+/// file, and the reader falls back to an older session with stale percentages.
+fn last_line_matching(path: &Path, needle: &str, accept: impl Fn(&str) -> bool) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
     if length == 0 {
@@ -84,7 +90,11 @@ fn last_line_containing(path: &Path, needle: &str) -> Option<String> {
             }
         };
 
-        if let Some(line) = searchable.lines().rev().find(|line| line.contains(needle)) {
+        if let Some(line) = searchable
+            .lines()
+            .rev()
+            .find(|line| line.contains(needle) && accept(line))
+        {
             return Some(line.to_string());
         }
     }
@@ -109,6 +119,21 @@ fn collect_session_files(dir: &Path, files: &mut Vec<(SystemTime, PathBuf)>) {
             }
         }
     }
+}
+
+/// True when a rate-limit event actually carries a window percentage. Codex
+/// writes `"primary":null,"secondary":null` events when a session winds down,
+/// and those say nothing about the account's usage.
+fn carries_rate_limit_windows(line: &str) -> bool {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    let Some(rate_limits) = event.pointer("/payload/rate_limits") else {
+        return false;
+    };
+    ["primary", "secondary"]
+        .into_iter()
+        .any(|key| rate_limits.get(key).and_then(used_percent).is_some())
 }
 
 fn used_percent(entry: &serde_json::Value) -> Option<f64> {
@@ -223,7 +248,8 @@ fn codex_usage_in(sessions_dir: &Path) -> Result<CodexUsageSnapshot, String> {
     // A freshly started session has no usage event yet, so fall back through the
     // next most recent rollouts until one reports rate limits.
     for (_, path) in files.into_iter().take(MAX_SESSION_CANDIDATES) {
-        let Some(line) = last_line_containing(&path, "\"rate_limits\"") else {
+        let Some(line) = last_line_matching(&path, "\"rate_limits\"", carries_rate_limit_windows)
+        else {
             continue;
         };
         let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -369,6 +395,37 @@ mod tests {
         assert_eq!(snapshot.windows[0].resets_at_epoch_seconds, Some(1788977819));
         assert_eq!(snapshot.windows[1].id, "weekly");
         assert_eq!(snapshot.windows[1].used_percent, 35.0);
+    }
+
+    /// Codex keeps writing rate-limit events after a session stops reporting
+    /// numbers. Taking the file's last mention of `rate_limits` therefore lands
+    /// on an empty event and throws away the whole session, so the reader falls
+    /// back to an older rollout and reports percentages that are hours stale.
+    #[test]
+    fn codex_reader_ignores_an_empty_trailing_rate_limit_event() {
+        let dir = temp_dir("codex-empty-tail");
+        let sessions = dir.join("2026").join("09").join("10");
+        fs::create_dir_all(&sessions).expect("create sessions");
+
+        let older = sessions.join("rollout-old.jsonl");
+        let mut file = File::create(&older).expect("create older rollout");
+        writeln!(file, "{}", codex_event(92.0, 49.0)).expect("write");
+        drop(file);
+
+        let newest = sessions.join("rollout-new.jsonl");
+        let mut file = File::create(&newest).expect("create newest rollout");
+        writeln!(file, "{}", codex_event(100.0, 51.0)).expect("write");
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-09-10T15:20:00.000Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"limit_id":"premium","primary":null,"secondary":null,"credits":{{"has_credits":false,"balance":"0"}},"plan_type":"plus"}}}}}}"#
+        )
+        .expect("write empty tail");
+        drop(file);
+
+        let snapshot = codex_usage_in(&dir).expect("snapshot");
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].used_percent, 100.0);
+        assert_eq!(snapshot.windows[1].used_percent, 51.0);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+mod cli_refresh;
 mod taskbar;
 mod usage;
 
@@ -1411,8 +1412,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         }
     }
 
-    TrayIconBuilder::new()
-        .tooltip("AI Usage Monitor")
+    let mut tray = TrayIconBuilder::new();
+    // Without this the tray shows an empty slot: the builder has no icon of its
+    // own, so it has to be handed the one bundled with the app.
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+
+    tray.tooltip("AI Usage Monitor")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1556,7 +1563,8 @@ pub fn run() {
             set_edge_dock_enabled,
             toggle_main_widget,
             usage::read_claude_usage,
-            usage::read_codex_usage
+            usage::read_codex_usage,
+            cli_refresh::run_cli_refresh
         ])
         .setup(|app| {
             let persisted_state = read_widget_state(app.handle());

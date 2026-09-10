@@ -1,10 +1,15 @@
 import { ChevronLeft, ChevronRight, RefreshCw, Settings, X } from "lucide-react"
-import { listen } from "@tauri-apps/api/event"
+import { emit, listen } from "@tauri-apps/api/event"
 import type { CSSProperties, ReactNode } from "react"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { ProviderUsage } from "../../../shared/types/usage"
 import { formatClock } from "../../../shared/utils/time"
 import { useEdgeDockStore } from "../../edge-dock/store/edgeDockStore"
+import {
+  cliRefreshRequestEvent,
+  refreshFinishedEvent,
+  runCliRefresh
+} from "../../taskbar-companion/services/companionRefresh"
 import type { DockSide, EdgeDockState } from "../../edge-dock/types/edgeDock"
 import { notifyThresholds } from "../../notifications/services/notifications"
 import { SettingsPanel } from "../../settings/components/SettingsPanel"
@@ -64,9 +69,39 @@ export function Widget() {
     setSkipTaskbar(settings.hideFromTaskbar)
   }, [settings.hideFromTaskbar])
 
+  /**
+   * Runs the user's configured CLI commands, then re-reads the files they
+   * wrote. Commands are optional: with none configured this is just a re-read,
+   * which is the same thing the tray item does.
+   */
+  const refreshWithCli = useCallback(async () => {
+    const commands = [settings.cliRefresh.claudeCommand, settings.cliRefresh.codexCommand]
+      .map((command) => command.trim())
+      .filter((command) => command.length > 0)
+
+    // One at a time: two CLIs racing for the same terminal-ish resources is a
+    // good way to get half-written rollout files.
+    for (const command of commands) {
+      try {
+        await runCliRefresh(command)
+      } catch {
+        // A failed command must not stop the re-read; the files may still hold
+        // something newer than what is on screen.
+      }
+    }
+
+    await refreshUsage(settings.demoMode)
+    await emit(refreshFinishedEvent).catch(() => undefined)
+  }, [refreshUsage, settings.cliRefresh.claudeCommand, settings.cliRefresh.codexCommand, settings.demoMode])
+
   useEffect(() => {
     const unlisteners = [
       listen("tray-refresh", () => refreshUsage(settings.demoMode)),
+      // The reload button asks for the expensive kind: run the user's CLI
+      // commands first so the providers rewrite their files, then re-read.
+      listen(cliRefreshRequestEvent, () => {
+        void refreshWithCli()
+      }),
       // The companion and its hover popup never fetch; they ask the one fetch
       // loop that lives here to re-broadcast what it already has.
       listen("usage-state-request", () => publishSnapshot()),
@@ -87,7 +122,7 @@ export function Widget() {
         unlisten.then((dispose) => dispose()).catch(() => undefined)
       })
     }
-  }, [applyEdgeDockState, publishSnapshot, refreshUsage, settings.demoMode, updateSettings])
+  }, [applyEdgeDockState, publishSnapshot, refreshUsage, refreshWithCli, settings.demoMode, updateSettings])
 
   useEffect(() => {
     hydrateEdgeDock().catch(() => undefined)

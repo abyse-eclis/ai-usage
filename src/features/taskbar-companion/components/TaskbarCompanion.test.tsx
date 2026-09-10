@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
+import { emit } from "@tauri-apps/api/event"
 import React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -35,6 +36,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
   emit: vi.fn().mockResolvedValue(undefined)
 }))
+
+const emitted = vi.mocked(emit)
 
 const invoked = vi.mocked(invoke)
 
@@ -139,15 +142,15 @@ describe("TaskbarCompanion", () => {
     })
   })
 
-  it("shows each provider's headline value and reset time", () => {
+  it("shows how much each provider has used and when it resets", () => {
     act(() => root.render(<TaskbarCompanion />))
 
-    // Claude reports 55% used, so the strip must read 45% remaining.
-    expect(host.textContent).toContain("45%")
-    // ChatGPT is counted in messages: 31 of 50 used leaves 19.
-    expect(host.textContent).toContain("19")
-    expect(host.textContent).not.toContain("used")
+    // Claude reports 55% used, and that is what the strip shows.
+    expect(host.textContent).toContain("55%")
+    // ChatGPT is counted in messages: 31 of 50 used.
+    expect(host.textContent).toContain("31")
     expect(host.textContent).not.toContain("left")
+    expect(host.textContent).not.toContain("remaining")
     expect(host.textContent).not.toContain("AI Usage")
   })
 
@@ -159,6 +162,33 @@ describe("TaskbarCompanion", () => {
     expect(host.querySelectorAll("img[data-provider-icon]").length).toBe(1)
     expect(host.textContent).toContain("--")
     expect(host.textContent).not.toContain("[C]")
+  })
+
+  it("asks the widget to fetch fresh usage when refresh is clicked", () => {
+    act(() => root.render(<TaskbarCompanion />))
+    const refresh = host.querySelector<HTMLButtonElement>("[data-companion-refresh]")!
+    expect(refresh).not.toBeNull()
+    emitted.mockClear()
+
+    act(() => refresh.click())
+
+    // The fetch loop lives in the Main Widget window, so the companion asks
+    // for a refresh rather than calling providers itself. It asks for the kind
+    // that runs the configured CLI commands first, which is what makes the
+    // providers write a new reading; the plain "tray-refresh" only re-reads.
+    const names = emitted.mock.calls.map(([name]) => name)
+    expect(names).toContain("usage-refresh-with-cli")
+    expect(names).not.toContain("tray-refresh")
+  })
+
+  it("does not pin the popup when refresh is clicked", () => {
+    act(() => root.render(<TaskbarCompanion />))
+    const refresh = host.querySelector<HTMLButtonElement>("[data-companion-refresh]")!
+    invoked.mockClear()
+
+    act(() => refresh.click())
+
+    expect(invoked.mock.calls).not.toContainEqual(["set_companion_popup_pinned", { pinned: true }])
   })
 
   it("resizes the native strip to the width its segments measure", () => {

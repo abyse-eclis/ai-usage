@@ -69,7 +69,7 @@ describe("CompanionPopup", () => {
     host.remove()
   })
 
-  it("lists every limit as remaining percent with its reset time", () => {
+  it("lists every limit as percent used with its reset time", () => {
     act(() => root.render(<CompanionPopup />))
 
     expect(host.textContent).toContain("Claude")
@@ -77,11 +77,11 @@ describe("CompanionPopup", () => {
     expect(host.textContent).not.toContain("[G]")
     // Window names are spelled out, not abbreviated to "5h" / "wly".
     expect(host.textContent).toContain("5-hour")
-    expect(host.textContent).toContain("45%")
+    expect(host.textContent).toContain("55%")
     expect(host.textContent).toContain("weekly")
-    expect(host.textContent).toContain("60%")
+    expect(host.textContent).toContain("40%")
     expect(host.textContent).toContain("fable")
-    expect(host.textContent).toContain("72%")
+    expect(host.textContent).toContain("28%")
     expect(host.textContent).not.toContain("5h ")
     expect(host.textContent).not.toContain("wly")
   })
@@ -90,8 +90,9 @@ describe("CompanionPopup", () => {
     act(() => root.render(<CompanionPopup />))
 
     expect(host.textContent).toContain("Window")
-    expect(host.textContent).toContain("Remaining")
+    expect(host.textContent).toContain("Used")
     expect(host.textContent).toContain("Resets")
+    expect(host.textContent).not.toContain("Remaining")
   })
 
   it("heads each provider section with its image icon next to the name", () => {
@@ -120,8 +121,8 @@ describe("CompanionPopup", () => {
     expect(host.textContent).toContain("ChatGPT")
     expect(host.textContent).not.toContain("[C]")
     expect(host.textContent).not.toContain("[G]")
-    // 31 of 50 messages used leaves 19, and the popup says what 19 counts.
-    expect(host.textContent).toContain("19")
+    // 31 of 50 messages used, and the popup says what 31 counts.
+    expect(host.textContent).toContain("31")
     expect(host.textContent).toContain("msgs")
   })
 

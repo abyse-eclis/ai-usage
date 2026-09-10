@@ -5,17 +5,17 @@ import {
   buildClaudeCompanionData,
   buildCompanionData,
   formatCompanionReset,
-  usedToRemainingPercent
+  remainingToUsedPercent
 } from "./taskbarCompanion"
 
 describe("taskbar companion formatting", () => {
   it.each([
-    [0, 100],
-    [23, 77],
-    [55, 45],
-    [100, 0]
-  ])("converts %s used to %s remaining", (used, remaining) => {
-    expect(usedToRemainingPercent(used)).toBe(remaining)
+    [100, 0],
+    [77, 23],
+    [45, 55],
+    [0, 100]
+  ])("converts %s remaining to %s used", (remaining, used) => {
+    expect(remainingToUsedPercent(remaining)).toBe(used)
   })
 
   it("formats same-day 5h reset as local 24-hour time", () => {
@@ -65,7 +65,9 @@ describe("taskbar companion formatting", () => {
     })
 
     expect(data.provider).toBe("claude")
-    expect(data.primary?.remainingPercent).toBe(45)
+    // The source reports 45% remaining, so the companion shows 55% used.
+    expect(data.primary?.usedPercent).toBe(55)
+    expect(data.primary?.valueText).toBe("55%")
   })
 
   it("maps Claude limits to compact popup rows", () => {
@@ -88,10 +90,10 @@ describe("taskbar companion formatting", () => {
       show: { showFiveHour: true, showWeekly: true, showFable: true }
     })
 
-    expect(data.rows.map((row) => [row.label, row.remainingPercent])).toEqual([
-      ["5-hour", 45],
-      ["weekly", 60],
-      ["fable", 72]
+    expect(data.rows.map((row) => [row.label, row.usedPercent])).toEqual([
+      ["5-hour", 55],
+      ["weekly", 40],
+      ["fable", 28]
     ])
     expect(data.checkedText).toBe("Checked 2m ago")
   })
@@ -165,10 +167,10 @@ describe("taskbar companion formatting", () => {
       show: { showFiveHour: true, showWeekly: true, showFable: true }
     })
 
-    // Percent limits read as a percentage; counted limits read as a count.
+    // Percent limits read as a percentage used; counted limits read as a count used.
     expect(data.providers.map((entry) => [entry.provider, entry.primary?.valueText])).toEqual([
-      ["claude", "90%"],
-      ["chatgpt", "19"]
+      ["claude", "10%"],
+      ["chatgpt", "31"]
     ])
     expect(data.providers.map((entry) => entry.primary?.resetText)).toEqual(["16:00", "Wed 15:00"])
   })
@@ -198,5 +200,52 @@ describe("taskbar companion formatting", () => {
     })
 
     expect(data.providers.map((entry) => entry.provider)).toEqual(["claude"])
+  })
+
+  it("reads a window whose reset has passed as unknown, not as the old number", () => {
+    const now = new Date("2026-09-10T20:15:00.000+07:00")
+    const usage: ProviderUsage = {
+      provider: "claude",
+      status: "connected",
+      updatedAt: now.toISOString(),
+      lastSuccessfulAt: now.toISOString(),
+      limits: [
+        // Read at 15:14, for a window that ended at 15:59.
+        normalizeLimit({
+          id: "five-hour",
+          label: "Session (5h)",
+          period: "session",
+          usedPercent: 35,
+          resetAt: "2026-09-10T15:59:59.000+07:00"
+        }),
+        normalizeLimit({
+          id: "seven-day",
+          label: "Weekly",
+          period: "weekly",
+          usedPercent: 26,
+          resetAt: "2026-09-16T14:59:59.000+07:00"
+        })
+      ]
+    }
+
+    const data = buildClaudeCompanionData({
+      usage,
+      refreshFailed: false,
+      now,
+      show: { showFiveHour: true, showWeekly: true, showFable: true }
+    })
+
+    const session = data.rows.find((row) => row.kind === "fiveHour")
+    expect(session?.stale).toBe(true)
+    expect(session?.valueText).toBe("--")
+    expect(session?.usedPercent).toBeUndefined()
+
+    // The weekly window has not rolled over, so it still reports a number.
+    const weekly = data.rows.find((row) => row.kind === "weekly")
+    expect(weekly?.stale).toBe(false)
+    expect(weekly?.valueText).toBe("26%")
+
+    // The strip shows the reading that is still true rather than a dash.
+    expect(data.primary?.kind).toBe("weekly")
   })
 })

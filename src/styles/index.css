@@ -76,8 +76,31 @@ select,
   }
 
   .field select,
+  .field input[type="text"],
   .field input[type="range"] {
     min-width: 5.5rem;
+  }
+
+  /* Text inputs need the same visible box as selects, or the field reads as
+     plain text with nowhere to type. */
+  .field input[type="text"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 1px solid rgb(255 255 255 / 0.12);
+    border-radius: 7px;
+    background: rgb(255 255 255 / 0.08);
+    padding: 0.15rem 0.4rem;
+    color: hsl(var(--color-text));
+    outline: none;
+  }
+
+  .field input[type="text"]:focus {
+    border-color: rgb(255 255 255 / 0.28);
+    background: rgb(255 255 255 / 0.12);
+  }
+
+  .field input[type="text"]::placeholder {
+    color: hsl(var(--color-muted-weak));
   }
 
   .field select {

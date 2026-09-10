@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { popupPinnedEvent, requestPopupDismiss } from "../services/companionPopup"
 import { useCompanionData } from "../hooks/useCompanionData"
 import { companionLog } from "../utils/log"
-import { remainingColor } from "../utils/remainingColor"
+import { usageColor } from "../utils/usageColor"
 import { ProviderIcon } from "../../../shared/components/ProviderIcon"
 
 /**
@@ -15,7 +15,7 @@ import { ProviderIcon } from "../../../shared/components/ProviderIcon"
  * popup.
  */
 export function CompanionPopup() {
-  const { data } = useCompanionData()
+  const { data, settings } = useCompanionData()
   const pinned = useRef(false)
 
   useEffect(() => {
@@ -62,7 +62,7 @@ export function CompanionPopup() {
         <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-4 gap-y-[5px] text-[13px] leading-none tabular-nums">
           <div className="contents text-[10.5px] uppercase tracking-[0.04em] text-[#8a8a8a]">
             <span>Window</span>
-            <span className="justify-self-end">Remaining</span>
+            <span className="justify-self-end">Used</span>
             <span className="justify-self-end">Resets</span>
           </div>
           {data.providers.map((entry) => (
@@ -73,12 +73,14 @@ export function CompanionPopup() {
               </h2>
               {entry.rows.map((row) => (
                 <div key={row.kind + row.label} className="contents">
-                  <span className="text-[#a9a9a9]">{row.label}</span>
-                  <span className={`justify-self-end font-semibold ${remainingColor(row.remainingPercent)}`}>
+                  <span className={row.stale ? "text-[#6f6f6f]" : "text-[#a9a9a9]"}>{row.label}</span>
+                  <span className={`justify-self-end font-semibold ${usageColor(row.usedPercent, settings.thresholds)}`}>
                     {row.valueText}
                     {row.valueUnit ? <span className="ml-1 font-normal text-[#a9a9a9]">{row.valueUnit}</span> : null}
                   </span>
-                  <span className="justify-self-end text-[#a9a9a9]">{row.resetText ?? "--"}</span>
+                  <span className={`justify-self-end ${row.stale ? "text-[#6f6f6f]" : "text-[#a9a9a9]"}`}>
+                    {row.resetText ?? "--"}
+                  </span>
                 </div>
               ))}
             </div>

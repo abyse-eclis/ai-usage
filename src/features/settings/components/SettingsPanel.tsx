@@ -1,4 +1,4 @@
-import { Bell, LayoutPanelLeft, Monitor, Palette, Plug, Settings, SlidersHorizontal } from "lucide-react"
+import { Bell, LayoutPanelLeft, Monitor, Palette, Plug, Settings, SlidersHorizontal, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import {
@@ -61,6 +61,38 @@ export function SettingsPanel({ open }: SettingsPanelProps) {
         <ProviderRow name="Claude" status={settings.demoMode ? "Demo connected" : "Unverified"} />
         <ProviderRow name="Codex" status={settings.demoMode ? "Demo connected" : "No stable source"} />
         <ProviderRow name="ChatGPT" status={settings.demoMode ? "Demo connected" : "Unavailable"} />
+      </Section>
+
+      <Section icon={<TerminalSquare className="size-4" />} title="Reload commands">
+        <p className="text-[10px] leading-snug text-[hsl(var(--color-muted))]">
+          Usage numbers are read from files the CLIs write. A CLI only writes them while handling a
+          real request, so these commands spend quota. They run on the reload button only, never on
+          the refresh interval. Leave empty to just re-read the files.
+        </p>
+        <label className="field">
+          <span>Claude</span>
+          <input
+            type="text"
+            spellCheck={false}
+            placeholder="e.g. claude -p ok"
+            value={settings.cliRefresh.claudeCommand}
+            onChange={(event) =>
+              updateSettings({ cliRefresh: { ...settings.cliRefresh, claudeCommand: event.target.value } })
+            }
+          />
+        </label>
+        <label className="field">
+          <span>Codex</span>
+          <input
+            type="text"
+            spellCheck={false}
+            placeholder="e.g. codex exec ok"
+            value={settings.cliRefresh.codexCommand}
+            onChange={(event) =>
+              updateSettings({ cliRefresh: { ...settings.cliRefresh, codexCommand: event.target.value } })
+            }
+          />
+        </label>
       </Section>
 
       <Section icon={<LayoutPanelLeft className="size-4" />} title="Presentation">
